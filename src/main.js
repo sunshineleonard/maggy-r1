@@ -258,7 +258,7 @@ function setTemp(m, ms, line) { st.temp = m; st.tempUntil = performance.now() + 
 function lightNow() { if (st.light !== "auto") return st.light; const h = new Date().getHours(); return h >= 7 && h < 17 ? "day" : h >= 17 && h < 20 ? "dusk" : "night"; }
 
 function poke() {
-  if (talk.pendingAudio) { const a = talk.pendingAudio; talk.pendingAudio = null; voice.src = a; voice.onended = doneTalking; voice.play().catch(() => doneTalking()); return; }
+  if (talk.pendingAudio) { const a = talk.pendingAudio; talk.pendingAudio = null; voice.src = a; rateUp(); voice.onended = doneTalking; voice.play().catch(() => doneTalking()); return; }
   if (talk.busy || talk.listening) return;
   const now = performance.now(); st.taps = st.taps.filter(t => now - t < 2500); st.taps.push(now); st.lastTouch = now;
   if (st.sleep !== "awake") { if (!st.auto) { st.auto = true; refreshChips(); } wake(true); return; }
@@ -371,6 +371,8 @@ let PASS = null;   // private pass code: arrives once in the install QR (?k=...)
 try { const q = new URLSearchParams(location.search).get("k"); if (q) localStorage.setItem("maggyKey", q); PASS = localStorage.getItem("maggyKey"); } catch (e) {}
 const talk = { busy: false, listening: false, rec: null, chunks: [], t0: 0, stream: null, stopAsked: false, history: [], pendingAudio: null };
 const voice = new Audio(); voice.preload = "auto";
+const VOICE_RATE = 1.08;   // user pick: her voice 8% faster, same pitch
+function rateUp() { voice.defaultPlaybackRate = VOICE_RATE; voice.playbackRate = VOICE_RATE; voice.preservesPitch = true; voice.webkitPreservesPitch = true; }
 let audioUnlocked = false;
 function silentWav() { const n = 2400, b = new ArrayBuffer(44 + n * 2), v = new DataView(b), w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
   w(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); w(8, "WAVE"); w(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
@@ -430,7 +432,7 @@ async function relay(path, body) {
   } finally { clearTimeout(timer); }
 }
 function playVoice(src) {
-  voice.src = src; voice.onended = doneTalking;
+  voice.src = src; rateUp(); voice.onended = doneTalking;
   voice.play().then(() => { talk.pendingAudio = null; }).catch(() => { talk.pendingAudio = src; hold(say.textContent + "  (tap me to hear it)"); });
 }
 function doneTalking() { talk.busy = false; st.talking = false; st.lastTouch = performance.now(); st.tempUntil = performance.now() + 5000; release(1800); }
