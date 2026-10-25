@@ -21,7 +21,7 @@
 </head>
 <body>
 <div id="page">
-  <h1>Maggy R1 probe <small id="pg">1/2</small></h1>
+  <h1>Maggy R1 probe <small><span id="pg">1/2</span> · tap</small></h1>
   <div id="p1">
     <div class="row"><span>Screen</span><b id="scr" class="wait">…</b></div>
     <div class="row"><span>WebGL 2</span><b id="gl2" class="wait">…</b></div>
@@ -154,6 +154,10 @@
     }).catch(function (e) { R.cam = 'DENY'; set('cam', 'failed: ' + (e.name || e), false); code(); });
   });
 
+  // tap the screen to flip pages too (the R1 keeps single side-clicks for itself on OS3)
+  document.getElementById('page').addEventListener('click', function (e) { if (e.target.id === 'camBtn') return; window.dispatchEvent(new Event('_flip')); });
+  window.addEventListener('_flip', function () { var p1 = document.getElementById('p1'), p2 = document.getElementById('p2');
+    var show2 = !p1.hidden; p1.hidden = show2; p2.hidden = !show2; document.getElementById('pg').textContent = show2 ? '2/2' : '1/2'; });
   // desktop testing: arrow keys / Esc / space act like the R1 controls
   window.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') window.dispatchEvent(new Event('sideClick'));
