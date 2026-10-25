@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=240, height=292, initial-scale=1, user-scalable=no">
+<title>Maggy voice test</title>
+<style>
+  html, body { margin: 0; background: #0e0e10; color: #f1ece4; font: 13px/1.35 system-ui, sans-serif; }
+  #wrap { padding: 6px 8px 40px; }
+  h1 { font-size: 15px; margin: 2px 0 6px; color: #ffb547; }
+  .row { border-top: 1px solid #2c2c33; padding: 6px 0; }
+  .lbl { color: #9a958d; font-size: 11px; }
+  .ok { color: #9be37a; } .no { color: #ff8a7a; } .wait { color: #ffd27a; }
+  button { font: 600 13px system-ui, sans-serif; background: #fe5000; color: #fff; border: 0; border-radius: 8px; padding: 8px 10px; margin: 4px 4px 0 0; }
+  button.alt { background: #3a3a44; }
+  #meter { height: 8px; background: #2c2c33; border-radius: 4px; overflow: hidden; margin-top: 4px; }
+  #meter i { display: block; height: 100%; width: 0; background: #9be37a; }
+  #code { font: 12px ui-monospace, monospace; color: #ffb547; word-break: break-all; }
+  #reply { white-space: pre-wrap; }
+</style></head>
+<body><div id="wrap">
+  <h1>Maggy voice test</h1>
+  <div class="lbl">Roll the wheel to scroll. Photo the code at the bottom when done.</div>
+
+  <div class="row"><div class="lbl">1. Speech-to-text built in?</div><div id="sr" class="wait">checking…</div></div>
+  <div class="row"><div class="lbl">2. Built-in talking voices?</div><div id="tts" class="wait">checking…</div>
+    <button id="ttsBtn" class="alt">Say "Hey sugar"</button></div>
+
+  <div class="row"><div class="lbl">3. Microphone: tap Record, say something, it plays it back</div>
+    <div id="mic" class="wait">not tried</div><div id="meter"><i></i></div>
+    <button id="recBtn">Record 4 s</button></div>
+
+  <div class="row"><div class="lbl">4. Listen and write down what you say</div>
+    <div id="hear" class="wait">not tried</div><button id="hearBtn">Listen</button></div>
+
+  <div class="row"><div class="lbl">5. Ask the R1's own AI (it should answer out loud)</div>
+    <div id="llm" class="wait">not tried</div><div id="reply"></div>
+    <button id="llmBtn">Ask, out loud</button><button id="llmQuiet" class="alt">Ask, silent</button></div>
+
+  <div class="row"><div class="lbl">6. Side button: hold it down while this page is open</div>
+    <div id="ptt" class="wait">not tried</div></div>
+
+  <div class="row"><div class="lbl">Result code</div><div id="code">…</div></div>
+</div>
+<script>
+(function () {
+  var R = { sr: '?', tts: '?', mic: '?', hear: '?', llm: '?', ptt: '-' };
+  function set(id, t, ok) { var e = document.getElementById(id); e.textContent = t; e.className = ok === true ? 'ok' : ok === false ? 'no' : 'wait'; }
+  function code() { document.getElementById('code').textContent = 'V1 sr' + R.sr + ' tts' + R.tts + ' mic' + R.mic + ' hear' + R.hear + ' llm' + R.llm + ' ptt' + R.ptt; }
+  code();
+
+  // wheel scrolls the page
+  window.addEventListener('scrollUp', function () { window.scrollBy(0, -60); });
+  window.addEventListener('scrollDown', function () { window.scrollBy(0, 60); });
+
+  // 1. speech recognition API present?
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SR) { R.sr = 'Y'; set('sr', 'yes, the API is there (step 4 checks it really works)', true); } else { R.sr = 'N'; set('sr', 'no', false); }
+  code();
+
+  // 2. speech synthesis voices
+  function listVoices() {
+    if (!window.speechSynthesis) { R.tts = 'N'; set('tts', 'no speechSynthesis', false); code(); return; }
+    var v = speechSynthesis.getVoices() || [], en = v.filter(function (x) { return /^en/i.test(x.lang); });
+    R.tts = v.length + '/' + en.length;
+    set('tts', v.length ? v.length + ' voices, ' + en.length + ' English' + (en[0] ? ' (e.g. ' + en[0].name + ')' : '') : 'API there, 0 voices so far', v.length > 0 ? true : null); code();
+  }
+  listVoices(); if (window.speechSynthesis) speechSynthesis.onvoiceschanged = listVoices; setTimeout(listVoices, 1500);
+  document.getElementById('ttsBtn').addEventListener('click', function () {
+    if (!window.speechSynthesis) return;
+    var u = new SpeechSynthesisUtterance('Hey sugar. Took you long enough.'); u.rate = .95; u.pitch = 1.2;
+    var en = speechSynthesis.getVoices().filter(function (x) { return /^en/i.test(x.lang); }); if (en[0]) u.voice = en[0];
+    u.onstart = function () { R.tts += 'S'; code(); }; u.onerror = function (e) { R.tts += 'E'; set('tts', 'speak error: ' + e.error, false); code(); };
+    speechSynthesis.speak(u);
+  });
+
+  // 3. microphone record + playback
+  document.getElementById('recBtn').addEventListener('click', function () {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { R.mic = 'N'; set('mic', 'no getUserMedia', false); code(); return; }
+    set('mic', 'asking for the mic…');
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      var AC = window.AudioContext || window.webkitAudioContext, ac = new AC(), an = ac.createAnalyser(); an.fftSize = 512;
+      ac.createMediaStreamSource(stream).connect(an); var buf = new Uint8Array(an.fftSize), peak = 0, run = true;
+      (function meter() { if (!run) return; an.getByteTimeDomainData(buf); var m = 0; for (var i = 0; i < buf.length; i++) m = Math.max(m, Math.abs(buf[i] - 128));
+        peak = Math.max(peak, m); document.querySelector('#meter i').style.width = Math.min(100, m / 1.28) + '%'; requestAnimationFrame(meter); })();
+      if (!window.MediaRecorder) { setTimeout(function () { run = false; stream.getTracks().forEach(function (t) { t.stop(); }); R.mic = 'L' + peak; set('mic', 'mic works (level ' + peak + '), but no recorder', peak > 5 ? true : null); code(); }, 4000); set('mic', 'listening (no recorder)…'); return; }
+      var chunks = [], rec = new MediaRecorder(stream); rec.ondataavailable = function (e) { chunks.push(e.data); };
+      rec.onstop = function () { run = false; stream.getTracks().forEach(function (t) { t.stop(); }); ac.close();
+        var blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' }); R.mic = 'Y' + peak + (rec.mimeType || '').replace(/[^a-z0-9]/gi, '').slice(0, 10);
+        set('mic', 'recorded ' + Math.round(blob.size / 1024) + ' KB (' + (rec.mimeType || '?') + '), level ' + peak + '. Playing back…', peak > 5);
+        var a = new Audio(URL.createObjectURL(blob)); a.play().catch(function (e) { set('mic', 'recorded, but playback failed: ' + e.name, null); }); code(); };
+      rec.start(); set('mic', 'recording… talk now'); setTimeout(function () { rec.stop(); }, 4000);
+    }).catch(function (e) { R.mic = 'DENY'; set('mic', 'failed: ' + (e.name || e), false); code(); });
+  });
+
+  // 4. speech recognition for real
+  document.getElementById('hearBtn').addEventListener('click', function () {
+    if (!SR) { R.hear = 'N'; set('hear', 'no speech recognition here', false); code(); return; }
+    try {
+      var r = new SR(); r.lang = 'en-US'; r.interimResults = true; r.maxAlternatives = 1; var got = '';
+      r.onresult = function (e) { got = ''; for (var i = 0; i < e.results.length; i++) got += e.results[i][0].transcript; set('hear', '"' + got + '"', true); };
+      r.onerror = function (e) { R.hear = 'E' + (e.error || '').slice(0, 8); set('hear', 'error: ' + e.error, false); code(); };
+      r.onend = function () { if (got) { R.hear = 'Y'; code(); } else if (R.hear === '?') { R.hear = 'X'; set('hear', 'ended, heard nothing', false); code(); } };
+      r.start(); set('hear', 'listening… say "hey Maggy"');
+    } catch (e) { R.hear = 'T'; set('hear', 'failed: ' + e.message, false); code(); }
+  });
+
+  // 5. the R1's LLM through the creations bridge
+  window.onPluginMessage = function (d) {
+    var txt = ''; try { txt = d && (d.message || d.data || ''); if (typeof txt !== 'string') txt = JSON.stringify(txt); } catch (e) { txt = String(d); }
+    try { var j = JSON.parse(txt); if (j && (j.message || j.text || j.response)) txt = j.message || j.text || j.response; } catch (e) {}
+    R.llm = R.llm.replace('?', '') + 'R'; set('llm', 'reply came back:', true); document.getElementById('reply').textContent = String(txt).slice(0, 300); code();
+  };
+  function ask(loud) {
+    if (!window.PluginMessageHandler) { R.llm = 'N'; set('llm', 'no PluginMessageHandler', false); code(); return; }
+    var msg = 'You are Maggy, a sassy Southern fairy who lives in a mason jar on a porch. In one short sentence, greet your boss who just picked you up.';
+    try { PluginMessageHandler.postMessage(JSON.stringify({ message: msg, useLLM: true, wantsR1Response: !!loud }));
+      R.llm = (R.llm === '?' ? '' : R.llm) + (loud ? 'L' : 'Q'); set('llm', loud ? 'sent; listen for the R1 to talk…' : 'sent quietly; waiting for text…'); code();
+    } catch (e) { R.llm = 'T'; set('llm', 'failed: ' + e.message, false); code(); }
+  }
+  document.getElementById('llmBtn').addEventListener('click', function () { ask(true); });
+  document.getElementById('llmQuiet').addEventListener('click', function () { ask(false); });
+
+  // 6. side button hold
+  var holds = 0;
+  window.addEventListener('longPressStart', function () { holds++; set('ptt', 'held (' + holds + ') — did the R1 start listening itself?', true); R.ptt = 'S' + holds; code(); });
+  window.addEventListener('longPressEnd', function () { R.ptt = 'S' + holds + 'E'; set('ptt', 'released (' + holds + ')', true); code(); });
+})();
+</script></body></html>

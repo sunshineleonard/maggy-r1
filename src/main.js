@@ -36,7 +36,10 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(38, 3 / 4, .05, 60);
-const LOOK = new THREE.Vector3(0, 1.3, 0), CAM_DIST = 3.85;   // close in: she fills ~3/4 of the jar window
+// two framings: CLOSE while she's up and about (she fills most of the R1 screen), WIDE when the hammock is out
+const CLOSE = { dist: +(new URLSearchParams(location.search).get("cd") || 3.05), y: +(new URLSearchParams(location.search).get("cy") || 1.1) };
+const WIDE = { dist: 3.85, y: 1.3 };
+const LOOK = new THREE.Vector3(0, CLOSE.y, 0); let CAM_DIST = CLOSE.dist, zoomOut = 0, lookCloseY = CLOSE.y, headStand = 1.85; const vHead = new THREE.Vector3();
 
 const hemi = new THREE.HemisphereLight(0xffe2c2, 0x2a1820, .95); scene.add(hemi);
 const key = new THREE.DirectionalLight(0xffd2a0, 1.5); key.position.set(-1.5, 3, 3); scene.add(key);
@@ -190,6 +193,7 @@ async function build() {
   box = new THREE.Box3().setFromObject(maggy, true); H = box.max.y - box.min.y;
   maggy.position.y += floorY - box.min.y; maggy.position.x -= (box.min.x + box.max.x) / 2; maggy.position.z -= (box.min.z + box.max.z) / 2 + .05;
   maggy.updateMatrixWorld(true);
+  if (headBone) { headBone.getWorldPosition(vHead); headStand = vHead.y; }   // standing head height, for the close framing
   // wings sized to her, attached to the upper spine each frame
   const ww = H * .34, wh = ww * 287 / 350;
   for (const [g, u0, sign] of [[wingL, 0, -1], [wingR, .5, 1]]) {
@@ -259,6 +263,7 @@ function poke() {
   if (!st.auto) { speak(st.manual); return; }
   if (st.taps.length >= 4) setTemp("annoyed", 6000); else setTemp("delighted", 4500);
 }
+window.__maggy = { fallAsleep: () => fallAsleep() };   // test hook
 function fallAsleep() {
   if (st.sleep !== "awake") return;
   st.sleep = "yawning"; st.sleepT = performance.now(); playClip("Yawn"); speak("sleepy");
@@ -431,6 +436,11 @@ function frame() {
   // camera: peek around her (drag), gentle drift when nobody is touching
   if (now - lastPointer > 2500) { tx = Math.sin(t / 5.2) * .3; ty = Math.sin(t / 7.3) * .12; }
   cx += (tx - cx) * .07; cy += (ty - cy) * .07;
+  const wantWide = st.sleep === "flying" || st.sleep === "asleep" || st.sleep === "landing" ? 1 : 0;
+  zoomOut += (wantWide - zoomOut) * (reduce ? 1 : .03);
+    // close framing follows her head down when she sits or crouches, so her whole body stays on screen
+  if (headBone && maggy) { headBone.getWorldPosition(vHead); const want = Math.max(.62, Math.min(CLOSE.y, vHead.y - (headStand - CLOSE.y))); lookCloseY += (want - lookCloseY) * .04; }
+  CAM_DIST = CLOSE.dist + (WIDE.dist - CLOSE.dist) * zoomOut; LOOK.y = lookCloseY + (WIDE.y - lookCloseY) * zoomOut;
   const yaw = reduce ? 0 : cx * .42, pitch = reduce ? 0 : cy * .14;
   camera.position.set(LOOK.x + Math.sin(yaw) * CAM_DIST * Math.cos(pitch), LOOK.y + .15 + Math.sin(pitch) * CAM_DIST, LOOK.z + Math.cos(yaw) * CAM_DIST * Math.cos(pitch));
   camera.lookAt(LOOK);
