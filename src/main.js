@@ -1,0 +1,453 @@
+import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+
+// R1 build: plain files served from GitHub Pages, so assets load normally (no artifact sandbox here)
+const ASSETS = { maggy: "assets/maggy.glb", bg: "assets/far-dusk.jpg", wings: "assets/wings.webp" };
+
+// ---------------- moods, clips, lines ----------------
+const MOODS = {
+  content:   { label: "Content",   color: "#ffb547", glow: .55, clips: ["Idle", "Happy_Idle", "Look_Around", "1_hand_Looking_w_turn", "Neck_Stretching", "Thinking", "Sitting_Idle"],
+               lines: ["Evenin', sugar.", "Porch-sittin' weather.", "I'm just fine in here. Mostly."] },
+  wants:     { label: "Wants you", color: "#5aa9ff", glow: .6,  clips: ["Waving", "Waving_2_hands", "Um_Helloooo_Knock", "Hey_Sugar"],
+               lines: ["Hey. Hey you. Over here.", "Ummm, helloooo?", "You forget about me, darlin'?"] },
+  delighted: { label: "Delighted", color: "#b6f25a", glow: .95, clips: ["Happy", "Baseball_Hit", "Macarena_Dance"],
+               lines: ["Well hey there!", "There you are!", "Now that's what I'm talkin' about!"] },
+  sassy:     { label: "Sassy",     color: "#ff6fb5", glow: .7,  clips: ["Shrugging", "No", "Shaking_Head_No"],
+               lines: ["Well, bless your heart.", "Don't you sugar me.", "I could fix your schedule. I won't. But I could."] },
+  annoyed:   { label: "Annoyed",   color: "#ff4d3d", glow: .85, clips: ["Angry", "Annoyed_Head_Shake", "Sad_Idle"],
+               lines: ["Quit tappin' the glass!", "Do I look like a snow globe to you?", "Keep it up, see what happens."] },
+  sleepy:    { label: "Sleepy",    color: "#b9a2ff", glow: .28, clips: ["Hammock_pose"],
+               lines: ["Mm... five more minutes.", "Wake me if the porch catches fire."] },
+};
+const LIGHT = {
+  day:   { label: "Day",   bg: [1.25, 1.2, 1.12], hemi: 1.25, k: .55, flies: 6 },
+  dusk:  { label: "Dusk",  bg: [1, 1, 1], hemi: .95,  k: .85, flies: 18 },
+  night: { label: "Night", bg: [.06, .09, .28], hemi: .45,  k: 1.0, flies: 40 },
+};
+const $ = id => document.getElementById(id);
+const root = document.documentElement, stage = $("stage"), canvas = $("c"), say = $("say");
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// ---------------- renderer, camera, scene ----------------
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+let pixelRatio = Math.min(1.5, devicePixelRatio || 1);   // R1 screen is 2x; 1.5 keeps it sharp and fast, drops to 1 if fps sags
+renderer.setPixelRatio(pixelRatio);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(38, 3 / 4, .05, 60);
+const LOOK = new THREE.Vector3(0, 1.3, 0), CAM_DIST = 3.85;   // close in: she fills ~3/4 of the jar window
+
+const hemi = new THREE.HemisphereLight(0xffe2c2, 0x2a1820, .95); scene.add(hemi);
+const key = new THREE.DirectionalLight(0xffd2a0, 1.5); key.position.set(-1.5, 3, 3); scene.add(key);
+const rim = new THREE.DirectionalLight(0x8fa8ff, .7); rim.position.set(2, 2.5, -2.5); scene.add(rim);
+const moodLight = new THREE.PointLight(0xffb547, 1, 3.2, 1.6); moodLight.position.set(0, 1.1, .7); scene.add(moodLight);
+
+const texLoader = new THREE.TextureLoader();
+const tex = uri => new Promise((res, rej) => texLoader.load(uri, t => { t.colorSpace = THREE.SRGBColorSpace; res(t); }, undefined, rej));
+const glbLoader = new GLTFLoader();
+const loadGLB = url => new Promise((res, rej) => glbLoader.load(url, res, p => {
+  if (p.total) $("loading").textContent = "Waking Maggy up… " + Math.round(p.loaded / p.total * 100) + "%"; }, rej));
+function radialTexture(inner = "rgba(255,255,255,1)", mid = "rgba(255,255,255,.35)") {
+  const c = document.createElement("canvas"); c.width = c.height = 128; const g = c.getContext("2d");
+  const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64); gr.addColorStop(0, inner); gr.addColorStop(.35, mid); gr.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = gr; g.fillRect(0, 0, 128, 128); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+
+// ---------------- the jar ----------------
+const JAR_R = 1.15, JAR_FLOOR = .09;
+const jar = new THREE.Group(); scene.add(jar);
+const profile = [[0, 0], [1.02, 0], [1.13, .06], [JAR_R, .2], [JAR_R, 2.32], [1.1, 2.48], [.97, 2.58], [.92, 2.64], [.92, 2.86]].map(([r, y]) => new THREE.Vector2(r, y));
+const glassMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, side: THREE.DoubleSide,
+  uniforms: { tint: { value: new THREE.Color(0xdfeeff) }, base: { value: .035 }, edge: { value: .55 } },
+  vertexShader: `varying vec3 vN; varying vec3 vV; varying vec3 vWN;
+    void main(){ vec4 mv = modelViewMatrix * vec4(position,1.); vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz);
+      vWN = normalize(mat3(modelMatrix) * normal); gl_Position = projectionMatrix * mv; }`,
+  fragmentShader: `uniform vec3 tint; uniform float base; uniform float edge; varying vec3 vN; varying vec3 vV; varying vec3 vWN;
+    void main(){ float f = 1. - abs(dot(normalize(vN), normalize(vV)));
+      float streak = pow(max(dot(normalize(vWN), normalize(vec3(-.75,.15,.65))), 0.), 60.) * .75
+                   + pow(max(dot(normalize(vWN), normalize(vec3(.8,.1,.6))), 0.), 120.) * .35;
+      float a = base + pow(f, 3.) * edge + streak; gl_FragColor = vec4(tint + streak, clamp(a, 0., .9)); }`,
+});
+const glass = new THREE.Mesh(new THREE.LatheGeometry(profile, 64), glassMat); glass.renderOrder = 10; jar.add(glass);
+for (const y of [2.68, 2.75]) {                                  // glass threads under the lid
+  const t = new THREE.Mesh(new THREE.TorusGeometry(.93, .012, 6, 64), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .18, depthWrite: false }));
+  t.rotation.x = Math.PI / 2; t.position.y = y; t.renderOrder = 11; jar.add(t);
+}
+const rust = new THREE.MeshStandardMaterial({ color: 0x8a4f2a, roughness: .78, metalness: .45 });
+const lid = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.0, .26, 64, 1, true), rust); lid.position.y = 2.93; jar.add(lid);
+const lidTop = new THREE.Mesh(new THREE.CircleGeometry(1.0, 64), new THREE.MeshStandardMaterial({ color: 0x3b2416, roughness: .9, metalness: .3, side: THREE.DoubleSide }));
+lidTop.rotation.x = Math.PI / 2; lidTop.position.y = 2.8; jar.add(lidTop);
+for (const y of [2.84, 2.93, 3.02]) { const r = new THREE.Mesh(new THREE.TorusGeometry(1.0, .018, 6, 64), rust); r.rotation.x = Math.PI / 2; r.position.y = y; jar.add(r); }
+const base = new THREE.Mesh(new THREE.CylinderGeometry(1.02, 1.02, JAR_FLOOR, 64), new THREE.MeshStandardMaterial({ color: 0xcfe3ee, roughness: .15, metalness: 0, transparent: true, opacity: .28 }));
+base.position.y = JAR_FLOOR / 2; jar.add(base);
+function plankTexture() {
+  const c = document.createElement("canvas"); c.width = 512; c.height = 512; const g = c.getContext("2d");
+  for (let i = 0; i < 8; i++) { const v = 70 + (i * 37) % 30; g.fillStyle = `rgb(${v + 38},${v + 12},${v - 18})`; g.fillRect(0, i * 64, 512, 64);
+    g.fillStyle = "rgba(0,0,0,.55)"; g.fillRect(0, i * 64, 512, 3);
+    g.strokeStyle = "rgba(40,20,8,.25)"; for (let k = 0; k < 6; k++) { g.beginPath(); const y = i * 64 + 8 + k * 9; g.moveTo(0, y);
+      for (let x = 0; x <= 512; x += 32) g.lineTo(x, y + Math.sin(x * .02 + i + k) * 2); g.stroke(); }
+    g.fillStyle = "rgba(0,0,0,.35)"; g.fillRect((i * 173) % 512, i * 64, 3, 64); }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(2, 2); return t;
+}
+const porch = new THREE.Mesh(new THREE.PlaneGeometry(9, 9), new THREE.MeshStandardMaterial({ map: plankTexture(), roughness: .9 }));
+porch.rotation.x = -Math.PI / 2; porch.rotation.z = .08; porch.position.set(0, -.001, -1.5); scene.add(porch);
+const shadow = new THREE.Mesh(new THREE.CircleGeometry(1.5, 48), new THREE.MeshBasicMaterial({ map: radialTexture("rgba(0,0,0,.7)", "rgba(0,0,0,.35)"), transparent: true, depthWrite: false }));
+shadow.rotation.x = -Math.PI / 2; shadow.position.y = .003; scene.add(shadow);
+const pool = new THREE.Mesh(new THREE.CircleGeometry(1.9, 48), new THREE.MeshBasicMaterial({ map: radialTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, color: 0xffb547 }));
+pool.rotation.x = -Math.PI / 2; pool.position.y = .004; scene.add(pool);
+
+// ---------------- backdrop, fireflies ----------------
+let bgMat;
+const flyGeo = new THREE.BufferGeometry(); const NF = 40; const flyBase = [];
+for (let i = 0; i < NF; i++) flyBase.push([(Math.random() - .5) * 9, .2 + Math.random() * 4, -1.8 - Math.random() * 4.5, Math.random() * 6.28, .4 + Math.random()]);
+flyGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(NF * 3), 3));
+const flies = new THREE.Points(flyGeo, new THREE.PointsMaterial({ size: .16, map: radialTexture("rgba(255,250,170,1)", "rgba(210,255,90,.45)"), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, color: 0xfff6a8 }));
+scene.add(flies);
+
+// ---------------- hammock (striped porch canvas) ----------------
+const HAM_Y = 1.62, HAM_LEN = 1.9, HAM_W = .66, HAM_SAG = .26;
+function hammockTexture() {
+  const c = document.createElement("canvas"); c.width = 256; c.height = 64; const g = c.getContext("2d");
+  const cols = ["#efe3cc", "#b5532f", "#efe3cc", "#3f6d8c", "#efe3cc", "#d9a441"];
+  for (let i = 0; i < 16; i++) { g.fillStyle = cols[i % cols.length]; g.fillRect(i * 16, 0, 16, 64); }
+  g.globalAlpha = .12; g.fillStyle = "#000"; for (let y = 0; y < 64; y += 3) g.fillRect(0, y, 256, 1);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const hammock = new THREE.Group(); hammock.position.y = HAM_Y; scene.add(hammock);
+{
+  const SU = 40, SV = 8, pos = [], uv = [], idx = [];
+  for (let i = 0; i <= SU; i++) for (let j = 0; j <= SV; j++) {
+    const u = i / SU, v = j / SV, x = (u - .5) * HAM_LEN, s = 1 - Math.pow(2 * u - 1, 2), w = (v - .5) * HAM_W * (.35 + .65 * Math.sqrt(s));
+    pos.push(x, -HAM_SAG * s + Math.pow((v - .5) * 2, 2) * .1 * s, w); uv.push(v, u);
+  }
+  for (let i = 0; i < SU; i++) for (let j = 0; j < SV; j++) { const a = i * (SV + 1) + j, b = a + SV + 1; idx.push(a, b, a + 1, b, b + 1, a + 1); }
+  const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2)); geo.setIndex(idx); geo.computeVertexNormals();
+  const hTex = hammockTexture();   // emissive copy keeps the stripes readable from underneath
+  const cloth = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: hTex, emissiveMap: hTex, emissive: 0xffffff, emissiveIntensity: .45, roughness: .95, side: THREE.DoubleSide, transparent: true }));
+  hammock.add(cloth);
+  const ropeMat = new THREE.MeshStandardMaterial({ color: 0xcdb48a, roughness: 1, transparent: true });
+  for (const sx of [-1, 1]) {
+    const from = new THREE.Vector3(sx * HAM_LEN / 2, 0, 0), to = new THREE.Vector3(sx * (JAR_R - .04), .45, 0);
+    const len = from.distanceTo(to); const rope = new THREE.Mesh(new THREE.CylinderGeometry(.012, .012, len, 6), ropeMat);
+    rope.position.copy(from).add(to).multiplyScalar(.5); rope.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), to.clone().sub(from).normalize());
+    hammock.add(rope);
+  }
+}
+hammock.visible = false;
+const setHammockOpacity = a => hammock.traverse(o => { if (o.material) { o.material.opacity = a; } });
+
+// ---------------- Maggy ----------------
+let mixer, maggy, H = 1.5, hipsBone, spineBone, headBone, upAxis = 1, hipsTrack = null;
+const maggyRoot = new THREE.Group(); scene.add(maggyRoot);
+const clips = {}, actions = {};
+let floorY = JAR_FLOOR;
+// in the hammock: turn her a quarter so she lies along it, then tip her back so she rests in the cloth
+const HEAD_UP_DEG = 0;                                  // + raises her head end, - raises her feet end
+let LIE_BACK = THREE.MathUtils.degToRad(62);          // replaced at load by a measured value that lays her flat
+const SLEEP_Q = new THREE.Quaternion();
+const legRest = [];                                      // leg bones + their straight (bind) rotation, used to straighten her legs in the hammock
+let legStraight = 0;
+function straightenLegs(w) { if (w <= 0) return; for (const [b, q] of legRest) b.quaternion.slerp(q, w); }
+const hammockRootPos = new THREE.Vector3(), X_AXIS = new THREE.Vector3(1, 0, 0), qRock = new THREE.Quaternion();
+
+// wings: two planes cut from the wing art, hinged at the spine
+const wingRig = new THREE.Group(); scene.add(wingRig);
+const wingL = new THREE.Group(), wingR = new THREE.Group(); wingRig.add(wingL, wingR);
+const wingMats = [];
+const glowSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: radialTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, color: 0xffb547 }));
+scene.add(glowSprite);
+const zTex = (() => { const c = document.createElement("canvas"); c.width = c.height = 64; const g = c.getContext("2d");
+  g.font = "bold 44px Kalam, cursive"; g.fillStyle = "#fff"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("z", 32, 34);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; })();
+const zs = [];
+
+async function build() {
+  const [gltf, bgTex, wingTex] = await Promise.all([loadGLB(ASSETS.maggy), tex(ASSETS.bg), tex(ASSETS.wings)]);
+  // backdrop plane far behind the jar
+  bgMat = new THREE.MeshBasicMaterial({ map: bgTex, color: 0xffffff });
+  const bg = new THREE.Mesh(new THREE.PlaneGeometry(17.5, 9.8), bgMat); bg.position.set(.8, 2.6, -8.5); scene.add(bg);
+
+  maggy = gltf.scene; maggyRoot.add(maggy);
+  maggy.traverse(o => {
+    if (o.isMesh) { o.frustumCulled = false; if (o.material) { o.material.side = THREE.FrontSide; } }
+    if (o.isBone) { if (/Hips$/.test(o.name) && !hipsBone) hipsBone = o; if (/Spine2$/.test(o.name)) spineBone = o; if (/Head$/.test(o.name)) headBone = o; }
+  });
+  hipsTrack = hipsBone ? hipsBone.name + ".position" : null;
+  maggy.traverse(o => { if (o.isBone && /(UpLeg|Leg|Foot|ToeBase)$/.test(o.name)) legRest.push([o, o.quaternion.clone()]); });
+  for (const c of gltf.animations) clips[c.name] = c;
+  mixer = new THREE.AnimationMixer(maggy);
+  maggy.updateMatrixWorld(true);
+  if (hipsBone && hipsBone.parent) { const pm = hipsBone.parent.matrixWorld; let best = -1;
+    [new THREE.Vector3(1,0,0), new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,1)].forEach((v, i) => { const d = Math.abs(v.transformDirection(pm).y); if (d > best) { best = d; upAxis = i; } }); }
+  for (const n in clips) clips[n] = pin(clips[n]);
+  // size + stand her on the jar floor, measured in the Idle pose
+  const probe = mixer.clipAction(clips.Idle); probe.play(); mixer.update(0); maggy.updateMatrixWorld(true);
+  let box = new THREE.Box3().setFromObject(maggy, true);
+  const s = 1.95 / (box.max.y - box.min.y);   // big in the jar: about 2/3 of its height maggy.scale.multiplyScalar(s); maggy.updateMatrixWorld(true);
+  box = new THREE.Box3().setFromObject(maggy, true); H = box.max.y - box.min.y;
+  maggy.position.y += floorY - box.min.y; maggy.position.x -= (box.min.x + box.max.x) / 2; maggy.position.z -= (box.min.z + box.max.z) / 2 + .05;
+  maggy.updateMatrixWorld(true);
+  // wings sized to her, attached to the upper spine each frame
+  const ww = H * .34, wh = ww * 287 / 350;
+  for (const [g, u0, sign] of [[wingL, 0, -1], [wingR, .5, 1]]) {
+    for (const additive of [false, true]) {
+      const geo = new THREE.PlaneGeometry(ww, wh); geo.translate(sign * ww / 2, 0, 0);
+      const uv = geo.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setX(i, u0 + uv.getX(i) * .5);
+      const m = new THREE.MeshBasicMaterial({ map: wingTex, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+        blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending, opacity: additive ? .55 : .35, color: 0xffffff });
+      wingMats.push({ m, additive }); g.add(new THREE.Mesh(geo, m));
+    }
+  }
+  probe.stop();
+  // where her hips sit in the hammock pose -> root offset that seats her in the cloth
+  if (clips.Hammock_pose) {   // measure her lying in the hammock: centre her on it and rest her lowest point on the sag
+    const a = mixer.clipAction(clips.Hammock_pose); a.play(); mixer.update(0); straightenLegs(1);
+    maggyRoot.position.set(0, 0, 0); maggyRoot.quaternion.identity(); maggy.updateMatrixWorld(true);
+    // tilt that makes her feet-to-head line level, so head and feet both settle into the cloth (user: 8 deg head-up was too much)
+    const head = new THREE.Vector3(), lf = new THREE.Vector3(), rf = new THREE.Vector3();
+    headBone.getWorldPosition(head);
+    legRest.filter(([b]) => /LeftFoot$/.test(b.name))[0][0].getWorldPosition(lf);
+    legRest.filter(([b]) => /RightFoot$/.test(b.name))[0][0].getWorldPosition(rf);
+    const v = head.sub(lf.add(rf).multiplyScalar(.5)); let best = 1e9;
+    for (let d = 20; d <= 110; d += .5) { const q = new THREE.Quaternion().setFromAxisAngle(X_AXIS, -THREE.MathUtils.degToRad(d));
+      const w = v.clone().applyQuaternion(q), err = Math.abs(Math.atan2(w.y, Math.hypot(w.x, w.z)) - THREE.MathUtils.degToRad(HEAD_UP_DEG));
+      if (err < best) { best = err; LIE_BACK = THREE.MathUtils.degToRad(d); } }
+    SLEEP_Q.setFromEuler(new THREE.Euler(-LIE_BACK, Math.PI / 2, 0, "YXZ"));
+    maggyRoot.quaternion.copy(SLEEP_Q); maggyRoot.updateMatrixWorld(true);
+    const b = new THREE.Box3().setFromObject(maggy, true), c = b.getCenter(new THREE.Vector3());
+    hammockRootPos.set(-c.x, (HAM_Y - HAM_SAG + .03) - b.min.y, -c.z);
+    maggyRoot.quaternion.identity(); maggyRoot.updateMatrixWorld(true); a.stop(); }
+  mixer.update(0);
+}
+function pin(clip) {                                   // keep her in place: remove the hips' travel across the floor (height kept)
+  const c = clip.clone();
+  for (const t of c.tracks) if (t.name === hipsTrack) { const v = t.values, f = [v[0], v[1], v[2]];
+    for (let i = 0; i < v.length; i += 3) for (let a = 0; a < 3; a++) if (a !== upAxis) v[i + a] = f[a]; }
+  return c;
+}
+
+// ---------------- clip player ----------------
+let current = null, currentName = null, clipUntil = 0;
+function playClip(name, fade = .4) {
+  if (!clips[name]) return;
+  const a = actions[name] ||= mixer.clipAction(clips[name]);
+  a.reset(); a.setLoop(THREE.LoopRepeat); a.setEffectiveWeight(1); a.play();
+  if (current && current !== a) current.crossFadeTo(a, fade, false);
+  current = a; currentName = name;
+  const d = clips[name].duration; clipUntil = performance.now() + 1000 * (d < .1 ? 4 + Math.random() * 3 : Math.max(d, 4) * (d < 3 ? 2 : 1));
+  $("clipName").textContent = name.replaceAll("_", " ");
+}
+function pickFrom(mood) { const list = MOODS[mood].clips.filter(n => clips[n]); const choices = list.length > 1 ? list.filter(n => n !== currentName) : list;
+  return choices[Math.floor(Math.random() * choices.length)]; }
+
+// ---------------- behaviour ----------------
+const st = { auto: true, manual: "content", mood: null, temp: null, tempUntil: 0, lastTouch: performance.now(), taps: [], light: "auto",
+  nextSass: performance.now() + 60000, sleep: "awake", sleepT: 0, flight: 0,
+  posFrom: new THREE.Vector3(), posTo: new THREE.Vector3(), qFrom: new THREE.Quaternion(), qTo: new THREE.Quaternion() };
+let sayTimer = 0;
+function speak(mood, line) { const l = MOODS[mood].lines; say.textContent = line || l[Math.floor(Math.random() * l.length)];
+  say.classList.add("on"); clearTimeout(sayTimer); sayTimer = setTimeout(() => say.classList.remove("on"), 3200); }
+function setTemp(m, ms, line) { st.temp = m; st.tempUntil = performance.now() + ms; speak(m, line); }
+function lightNow() { if (st.light !== "auto") return st.light; const h = new Date().getHours(); return h >= 7 && h < 17 ? "day" : h >= 17 && h < 20 ? "dusk" : "night"; }
+
+function poke() {
+  const now = performance.now(); st.taps = st.taps.filter(t => now - t < 2500); st.taps.push(now); st.lastTouch = now;
+  if (st.sleep !== "awake") { if (!st.auto) { st.auto = true; refreshChips(); } wake(true); return; }
+  if (!st.auto) { speak(st.manual); return; }
+  if (st.taps.length >= 4) setTemp("annoyed", 6000); else setTemp("delighted", 4500);
+}
+function fallAsleep() {
+  if (st.sleep !== "awake") return;
+  st.sleep = "yawning"; st.sleepT = performance.now(); playClip("Yawn"); speak("sleepy");
+}
+function wake(rude) {
+  if (st.sleep === "awake" || st.sleep === "landing") return;
+  st.sleep = "landing"; st.sleepT = performance.now(); st.flight = 1;
+  st.posFrom.copy(maggyRoot.position); st.qFrom.copy(maggyRoot.quaternion); st.posTo.set(0, 0, 0); st.qTo.identity();
+  playClip(rude ? "Annoyed_Head_Shake" : "Neck_Stretching", .5);
+  if (rude) setTemp("annoyed", 5000, "I was NAPPIN'."); else st.temp = null;
+  st.lastTouch = performance.now();
+}
+const ease = t => t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+function sleepTick(now) {
+  if (st.sleep === "yawning" && now - st.sleepT > Math.min(5200, (clips.Yawn?.duration || 4) * 1000)) {
+    st.sleep = "flying"; st.sleepT = now; hammock.visible = true; st.flight = 1;
+    st.posFrom.copy(maggyRoot.position); st.qFrom.copy(maggyRoot.quaternion); st.posTo.copy(hammockRootPos); st.qTo.copy(SLEEP_Q);
+    playClip("Hammock_pose", .9);
+  }
+  if (st.sleep === "flying") {
+    const t = Math.min(1, (now - st.sleepT) / 1900), e = ease(t); setHammockOpacity(Math.min(1, t * 2));
+    maggyRoot.position.lerpVectors(st.posFrom, st.posTo, e); maggyRoot.quaternion.slerpQuaternions(st.qFrom, st.qTo, e);
+    if (t >= 1) { st.sleep = "asleep"; st.flight = 0; }
+  }
+  if (st.sleep === "landing") {
+    const t = Math.min(1, (now - st.sleepT) / 1400), e = ease(t); setHammockOpacity(1 - t);
+    maggyRoot.position.lerpVectors(st.posFrom, st.posTo, e); maggyRoot.quaternion.slerpQuaternions(st.qFrom, st.qTo, e);
+    if (t >= 1) { st.sleep = "awake"; st.flight = 0; hammock.visible = false; hammock.rotation.x = 0; maggyRoot.position.set(0, 0, 0); maggyRoot.quaternion.identity(); }
+  }
+}
+
+function tick() {
+  const now = performance.now(), idle = (now - st.lastTouch) / 1000;
+  let mood;
+  if (st.sleep !== "awake" && st.sleep !== "landing") mood = "sleepy";
+  else if (!st.auto) mood = st.manual;
+  else if (st.temp && now < st.tempUntil) mood = st.temp;
+  else { st.temp = null; mood = idle > 240 ? "sleepy" : idle > 45 ? "wants" : "content";
+    if (mood === "content" && idle > 12 && now > st.nextSass) { st.nextSass = now + 90000; setTemp("sassy", 6000); mood = "sassy"; } }
+  if (mood === "sleepy" && st.sleep === "awake") { fallAsleep(); }
+  if (mood !== "sleepy" && (st.sleep === "asleep" || st.sleep === "flying" || st.sleep === "yawning") && !st.auto) wake(false);
+  let glow = MOODS[mood].glow;
+  if (mood === "wants" && st.auto) glow = .6 + .4 * Math.min(1, (idle - 45) / 75) + .08 * Math.sin(now / 420);
+  if (mood === "annoyed") glow += .06 * Math.sin(now / 90);
+  const L = lightNow(); st.glow = Math.max(0, Math.min(1.15, glow * LIGHT[L].k)); st.L = L;
+  if (mood !== st.mood) { const prev = st.mood; st.mood = mood; showMood(mood, prev); }
+  else if (st.sleep === "awake" && now > clipUntil) playClip(pickFrom(mood));
+  $("why").textContent = st.sleep !== "awake" ? `napping (${st.sleep})` : !st.auto ? "held by test control"
+    : mood === "wants" ? `ignored ${Math.round(idle)}s, glowing brighter` : st.temp ? "reacting to you" : `idle ${Math.round(idle)}s · ${LIGHT[L].label.toLowerCase()}`;
+}
+const moodColor = new THREE.Color(0xffb547), targetColor = new THREE.Color(0xffb547);
+function showMood(mood, prev) {
+  targetColor.set(MOODS[mood].color); root.style.setProperty("--mood", MOODS[mood].color);
+  $("moodName").textContent = MOODS[mood].label;
+  if (st.sleep === "awake") playClip(pickFrom(mood), .45);
+  if (st.auto && prev && mood === "wants") speak(mood);
+}
+
+// ---------------- controls ----------------
+const chip = (row, k, label, color, fn) => { const b = document.createElement("button"); b.className = "chip"; b.type = "button"; b.id = row.id + "-" + k;
+  b.setAttribute("aria-pressed", "false"); if (color) { const d = document.createElement("span"); d.className = "dot"; d.style.background = color; b.append(d); }
+  b.append(label); b.addEventListener("click", fn); row.append(b); };
+const moodRow = $("moodRow"), lightRow = $("lightRow");
+function refreshChips() { moodRow.querySelectorAll(".chip").forEach(b => b.setAttribute("aria-pressed", String(b.id === "moodRow-" + (st.auto ? "auto" : st.manual))));
+  lightRow.querySelectorAll(".chip").forEach(b => b.setAttribute("aria-pressed", String(b.id === "lightRow-" + st.light))); }
+chip(moodRow, "auto", "Auto", null, () => { st.auto = true; st.temp = null; st.lastTouch = performance.now(); if (st.sleep !== "awake") wake(false); refreshChips(); });
+for (const [k, m] of Object.entries(MOODS)) chip(moodRow, k, m.label, m.color, () => { st.auto = false; st.manual = k; if (k !== "sleepy" && st.sleep !== "awake") wake(false); refreshChips(); speak(k); st.mood = null; });
+chip(lightRow, "auto", "Auto", null, () => { st.light = "auto"; refreshChips(); });
+for (const [k, l] of Object.entries(LIGHT)) chip(lightRow, k, l.label, null, () => { st.light = k; refreshChips(); });
+
+// tap = poke the glass; drag = peek around her
+let tx = 0, ty = 0, cx = 0, cy = 0, lastPointer = -1e9, down = null;
+function aim(e) { const r = stage.getBoundingClientRect(); tx = Math.max(-1, Math.min(1, ((e.clientX - r.left) / r.width - .5) * 2));
+  ty = Math.max(-1, Math.min(1, ((e.clientY - r.top) / r.height - .5) * 2)); lastPointer = performance.now(); }
+stage.addEventListener("pointermove", aim);
+stage.addEventListener("pointerdown", e => { aim(e); down = { x: e.clientX, y: e.clientY, t: performance.now() }; });
+stage.addEventListener("pointerup", e => { if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 10 && performance.now() - down.t < 450) poke(); down = null; });
+stage.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); poke(); } });
+stage.tabIndex = 0;
+
+// ---------------- R1 hardware ----------------
+// scroll wheel: peek around her (holds the view a few seconds, then she drifts back)
+function peek(d) { tx = Math.max(-1, Math.min(1, tx + d)); ty = 0; lastPointer = performance.now() + 3000; }
+window.addEventListener("scrollUp", () => peek(-.3));
+window.addEventListener("scrollDown", () => peek(.3));
+// long press (hold the side button): a gentle "hey" that wakes her nicely instead of rudely
+window.addEventListener("longPressStart", () => {
+  st.lastTouch = performance.now();
+  if (st.sleep !== "awake") { wake(false); setTemp("content", 4000, "Mornin', sugar."); }
+  else if (st.auto) setTemp("delighted", 4500, "Well hey there, boss!");
+});
+// shake: gentle shake wakes her; a hard shake makes her mad (R1 motion events: peak jolt ~40 when shaken hard)
+let lastAcc = null, shakeCooldown = 0;
+window.addEventListener("devicemotion", e => {
+  const a = e.accelerationIncludingGravity; if (!a || a.x == null) return;
+  if (lastAcc) {
+    const jerk = Math.hypot(a.x - lastAcc.x, a.y - lastAcc.y, a.z - lastAcc.z), now = performance.now();
+    if (now > shakeCooldown && jerk > 12) {
+      shakeCooldown = now + 1500; st.lastTouch = now;
+      const hard = jerk > 28;
+      if (st.sleep !== "awake") { wake(hard); if (!hard) setTemp("content", 4000, "Alright, alright, I'm up."); }
+      else if (hard) setTemp("annoyed", 6000, "Quit shakin' my jar!");
+      else if (st.auto) setTemp("sassy", 4500, "Whoa there, easy on the jar.");
+    }
+  }
+  lastAcc = { x: a.x, y: a.y, z: a.z };
+});
+// desktop testing: arrows = wheel, space = long press, S = gentle shake, H = hard shake
+window.addEventListener("keydown", e => {
+  if (e.key === "ArrowUp") window.dispatchEvent(new Event("scrollUp"));
+  if (e.key === "ArrowDown") window.dispatchEvent(new Event("scrollDown"));
+  if (e.key === "l") window.dispatchEvent(new Event("longPressStart"));
+});
+
+// ---------------- frame loop ----------------
+const clock = new THREE.Clock(); let frames = 0, acc = 0, nextZ = 0;
+const v1 = new THREE.Vector3(), q1 = new THREE.Quaternion(), qCorr = new THREE.Quaternion(), qBody = new THREE.Quaternion();
+let corrReady = false, fold = 0;
+function resize() { const w = canvas.clientWidth, h = canvas.clientHeight; const pr = renderer.getPixelRatio();
+  if (canvas.width !== Math.round(w * pr) || canvas.height !== Math.round(h * pr)) { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } }
+function frame() {
+  const dt = Math.min(.05, clock.getDelta()), t = clock.elapsedTime, now = performance.now(); resize();
+  if (mixer) {
+    sleepTick(now);
+    if (st.sleep === "asleep") {   // hammock rocks; she rocks with it about the same pivot
+      const a = reduce ? 0 : Math.sin(t * .9) * .05; hammock.rotation.x = a; qRock.setFromAxisAngle(X_AXIS, a);
+      maggyRoot.quaternion.copy(qRock).multiply(SLEEP_Q);
+      maggyRoot.position.copy(hammockRootPos).sub(hammock.position).applyQuaternion(qRock).add(hammock.position);
+    }
+    hammock.position.y = HAM_Y;
+    mixer.update(dt);
+    const legTarget = st.sleep === "asleep" ? 1 : st.sleep === "flying" ? Math.min(1, (now - st.sleepT) / 1900) : st.sleep === "landing" ? 1 - Math.min(1, (now - st.sleepT) / 1400) : 0;
+    legStraight += (legTarget - legStraight) * .25; straightenLegs(legStraight);
+    maggy.updateMatrixWorld(true);
+    // wings follow the upper spine
+    if (spineBone) {
+      spineBone.getWorldQuaternion(q1); spineBone.getWorldPosition(v1);
+      if (!corrReady) { maggyRoot.getWorldQuaternion(qBody); qCorr.copy(q1).invert().multiply(qBody); corrReady = true; }
+      wingRig.quaternion.copy(q1).multiply(qCorr);
+      wingRig.position.copy(v1).add(new THREE.Vector3(0, H * .015, -H * .075).applyQuaternion(wingRig.quaternion));
+      const fast = st.flight ? 30 : st.sleep === "asleep" ? 2 : 13, amp = st.flight ? .55 : st.sleep === "asleep" ? .05 : .3;
+      const flap = reduce ? 0 : Math.sin(t * fast) * amp;
+      fold += ((st.sleep === "asleep" ? 1 : 0) - fold) * .05;           // tuck the wings away while she naps
+      wingL.rotation.y = -(.45 + fold * 1.0) - flap; wingR.rotation.y = (.45 + fold * 1.0) + flap;   // tips swept back behind her
+      wingRig.scale.setScalar(Math.max(.001, 1 - fold)); wingRig.visible = fold < .97;
+      glowSprite.position.copy(v1).add(new THREE.Vector3(0, -H * .05, -H * .2)); glowSprite.scale.setScalar(H * (1.1 + st.glow * .9));
+    }
+    // mood colour + glow
+    moodColor.lerp(targetColor, .06);
+    const g = st.glow || .5;
+    moodLight.color.copy(moodColor); moodLight.intensity = 1.2 + g * 3.2; moodLight.position.set(0, maggyRoot.position.y + H * .55, .75);
+    glowSprite.material.color.copy(moodColor); glowSprite.material.opacity = .25 + g * .55;
+    pool.material.color.copy(moodColor); pool.material.opacity = .15 + g * .45;
+    glassMat.uniforms.tint.value.set(0xdfeeff).lerp(moodColor, .25 + g * .2);
+    for (const { m, additive } of wingMats) { if (additive) { m.color.copy(moodColor); m.opacity = (.3 + g * .5) * (1 - fold * .7); } else m.opacity = .35 * (1 - fold * .6); }
+    // light of day
+    const LL = LIGHT[st.L || "dusk"]; bgMat && bgMat.color.lerp(new THREE.Color().fromArray(LL.bg), .08);   // linear multipliers; day > 1 brightens hemi.intensity += (LL.hemi - hemi.intensity) * .05;
+    // fireflies
+    const p = flyGeo.attributes.position.array, nf = LL.flies;
+    for (let i = 0; i < NF; i++) { const b = flyBase[i], on = i < nf;
+      p[i * 3] = b[0] + Math.sin(t * .2 * b[4] + b[3]) * .5; p[i * 3 + 1] = on ? b[1] + Math.sin(t * .33 * b[4] + b[3] * 2) * .3 : -50; p[i * 3 + 2] = b[2]; }
+    flyGeo.attributes.position.needsUpdate = true; flies.material.opacity = .55 + .45 * Math.sin(t * 2.3);
+    // Zzz while asleep
+    if (st.sleep === "asleep" && t > nextZ && headBone) { nextZ = t + 1.3; const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: zTex, transparent: true, depthWrite: false, color: 0xd9ccff }));
+      headBone.getWorldPosition(s.position); s.position.add(new THREE.Vector3(.12, .12, .1)); s.scale.setScalar(.14); s.userData.born = t; scene.add(s); zs.push(s); }
+    for (let i = zs.length - 1; i >= 0; i--) { const s = zs[i], age = t - s.userData.born; s.position.y += dt * .22; s.position.x += Math.sin(age * 3) * dt * .08;
+      s.material.opacity = Math.max(0, 1 - age / 2.6); s.scale.setScalar(.14 + age * .05); if (age > 2.6) { scene.remove(s); s.material.dispose(); zs.splice(i, 1); } }
+  }
+  // camera: peek around her (drag), gentle drift when nobody is touching
+  if (now - lastPointer > 2500) { tx = Math.sin(t / 5.2) * .3; ty = Math.sin(t / 7.3) * .12; }
+  cx += (tx - cx) * .07; cy += (ty - cy) * .07;
+  const yaw = reduce ? 0 : cx * .42, pitch = reduce ? 0 : cy * .14;
+  camera.position.set(LOOK.x + Math.sin(yaw) * CAM_DIST * Math.cos(pitch), LOOK.y + .15 + Math.sin(pitch) * CAM_DIST, LOOK.z + Math.cos(yaw) * CAM_DIST * Math.cos(pitch));
+  camera.lookAt(LOOK);
+  renderer.render(scene, camera);
+  frames++; acc += dt;
+  if (acc > .5) { const fps = Math.round(frames / acc); $("fps").textContent = fps; frames = 0; acc = 0;
+    // after a few seconds settle: if the R1 can't keep ~28 fps, render at 1x pixels instead of 1.5x
+    if (t > 4 && fps < 28 && pixelRatio > 1) { pixelRatio = 1; renderer.setPixelRatio(1); } }
+  requestAnimationFrame(frame);
+}
+
+(async () => { try {
+  await build();
+  $("loading").hidden = true;
+  refreshChips(); tick(); setInterval(tick, 250); requestAnimationFrame(frame);
+  setTimeout(() => speak("content", "Evenin', sugar."), 800);
+  window.__maggy = { st, playClip, poke, fallAsleep, wake, get bg() { return bgMat; } };   // test hook
+} catch (e) {
+  $("loading").textContent = "Maggy couldn't load: " + (e && e.message ? e.message : e);
+} })();
