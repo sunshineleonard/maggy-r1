@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=240, initial-scale=1.0, user-scalable=no">
+<title>Maggy R1 Probe</title>
+<style>
+  /* Fixed 240x282 R1 screen. Big, high-contrast results so a photo of the screen is readable. */
+  html, body { margin: 0; background: #0e0e10; color: #f3e6d6; font: 12px/1.3 -apple-system, "Segoe UI", sans-serif; }
+  body { width: 240px; height: 282px; overflow: hidden; position: relative; }
+  #page { position: absolute; inset: 0; padding: 6px 8px; box-sizing: border-box; overflow: hidden; }
+  h1 { font-size: 13px; margin: 0 0 4px; color: #ffb547; display: flex; justify-content: space-between; }
+  h1 small { color: #a8968a; font-weight: 400; }
+  .row { display: flex; justify-content: space-between; gap: 6px; padding: 2px 0; border-bottom: 1px solid #241a1f; }
+  .row b { font-weight: 600; }
+  .ok { color: #b6f25a; } .no { color: #ff6b5a; } .wait { color: #a8968a; }
+  #code { margin-top: 5px; padding: 4px 6px; background: #241a1f; border-radius: 6px; font: 600 11px/1.35 ui-monospace, monospace; color: #fff; word-break: break-all; }
+  #gl { position: absolute; right: 8px; top: 6px; width: 40px; height: 40px; }
+  .btn { margin-top: 5px; width: 100%; font: 600 12px sans-serif; color: #0e0e10; background: #ffb547; border: 0; border-radius: 6px; padding: 5px; }
+</style>
+</head>
+<body>
+<div id="page">
+  <h1>Maggy R1 probe <small id="pg">1/2</small></h1>
+  <div id="p1">
+    <div class="row"><span>Screen</span><b id="scr" class="wait">…</b></div>
+    <div class="row"><span>WebGL 2</span><b id="gl2" class="wait">…</b></div>
+    <div class="row"><span>WebGL 1</span><b id="gl1" class="wait">…</b></div>
+    <div class="row"><span>3D speed</span><b id="glfps" class="wait">…</b></div>
+    <div class="row"><span>2D speed</span><b id="c2fps" class="wait">…</b></div>
+    <div class="row"><span>Tilt sensor</span><b id="acc" class="wait">…</b></div>
+    <div class="row"><span>Motion events</span><b id="mot" class="wait">shake me</b></div>
+    <div class="row"><span>Wheel / side btn</span><b id="hw" class="wait">try them</b></div>
+    <div id="code">running…</div>
+  </div>
+  <div id="p2" hidden>
+    <div class="row"><span>Camera API</span><b id="cam" class="wait">…</b></div>
+    <div class="row"><span>Storage API</span><b id="sto" class="wait">…</b></div>
+    <div class="row"><span>LLM bridge</span><b id="llm" class="wait">…</b></div>
+    <div class="row"><span>GPU</span><b id="gpu" class="wait">…</b></div>
+    <div class="row"><span>Max texture</span><b id="mtx" class="wait">…</b></div>
+    <div class="row"><span>DPR / UA</span><b id="ua" class="wait" style="font-size:10px">…</b></div>
+    <button class="btn" id="camBtn" type="button">Tap: try the camera</button>
+    <video id="v" playsinline muted style="display:none;width:72px;height:54px;margin-top:4px"></video>
+  </div>
+</div>
+<canvas id="gl" width="40" height="40"></canvas>
+<script>
+(function () {
+  var R = {};                                        // results for the summary code
+  function set(id, text, ok) { var e = document.getElementById(id); e.textContent = text; e.className = ok === true ? 'ok' : ok === false ? 'no' : 'wait'; }
+  function code() {
+    document.getElementById('code').textContent =
+      'GL2:' + (R.gl2 || '?') + ' GL1:' + (R.gl1 || '?') + ' 3D:' + (R.glfps || '?') + 'fps 2D:' + (R.c2fps || '?') + 'fps' +
+      ' TILT:' + (R.acc || '?') + ' MOT:' + (R.mot || '?') + ' HW:' + (R.hw || '-') + ' CAM:' + (R.cam || '?') + ' ' + (R.scr || '');
+  }
+
+  // ---- screen
+  R.scr = innerWidth + 'x' + innerHeight + '@' + (window.devicePixelRatio || 1);
+  set('scr', R.scr, innerWidth >= 230);
+
+  // ---- WebGL
+  var probe = document.createElement('canvas');
+  var g2 = null, g1 = null;
+  try { g2 = probe.getContext('webgl2'); } catch (e) {}
+  try { g1 = document.getElementById('gl').getContext('webgl') || document.getElementById('gl').getContext('experimental-webgl'); } catch (e) {}
+  R.gl2 = g2 ? 'Y' : 'N'; R.gl1 = g1 ? 'Y' : 'N';
+  set('gl2', g2 ? 'yes' : 'no', !!g2); set('gl1', g1 ? 'yes' : 'no', !!g1);
+  var anyGL = g2 || g1;
+  if (anyGL) {
+    var dbg = anyGL.getExtension('WEBGL_debug_renderer_info');
+    set('gpu', dbg ? anyGL.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : anyGL.getParameter(anyGL.RENDERER), true);
+    set('mtx', String(anyGL.getParameter(anyGL.MAX_TEXTURE_SIZE)), true);
+  } else { set('gpu', 'none', false); set('mtx', '-', false); }
+
+  // ---- 3D speed: spinning shaded triangle fan, 3 s, using the visible 40x40 canvas at full R1 size off-screen
+  function glSpeed(done) {
+    if (!g1) { R.glfps = 'N'; set('glfps', 'n/a', false); return done(); }
+    var big = document.createElement('canvas'); big.width = 240; big.height = 282;
+    var gl = big.getContext('webgl') || g1;
+    var vs = 'attribute vec3 p;uniform float t;varying float s;void main(){float c=cos(t),n=sin(t);vec3 q=vec3(p.x*c-p.z*n,p.y,p.x*n+p.z*c);s=.5+.5*q.z;gl_Position=vec4(q.xy*.8,q.z*.5,1.);}';
+    var fs = 'precision mediump float;varying float s;void main(){gl_FragColor=vec4(1.,.7*s,.3*s,1.);}';
+    function sh(type, src) { var o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); return o; }
+    var pr = gl.createProgram(); gl.attachShader(pr, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(pr); gl.useProgram(pr);
+    var N = 30000, a = new Float32Array(N * 9);      // ~30k triangles, about Maggy's size
+    for (var i = 0; i < a.length; i++) a[i] = Math.random() * 2 - 1;
+    var b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, a, gl.STATIC_DRAW);
+    var loc = gl.getAttribLocation(pr, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+    var ut = gl.getUniformLocation(pr, 't'); gl.enable(gl.DEPTH_TEST);
+    var n = 0, t0 = performance.now();
+    (function f() {
+      var t = performance.now() - t0; gl.viewport(0, 0, 240, 282); gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.uniform1f(ut, t / 600); gl.drawArrays(gl.TRIANGLES, 0, N * 3); n++;
+      if (t < 3000) requestAnimationFrame(f); else { R.glfps = Math.round(n / (t / 1000)); set('glfps', R.glfps + ' fps (30k tris)', R.glfps >= 20); done(); }
+    })();
+  }
+  // ---- 2D speed: 150 moving sprites with alpha, 3 s
+  function c2Speed(done) {
+    var c = document.createElement('canvas'); c.width = 240; c.height = 282; var x = c.getContext('2d');
+    var n = 0, t0 = performance.now();
+    (function f() {
+      var t = performance.now() - t0; x.clearRect(0, 0, 240, 282);
+      for (var i = 0; i < 150; i++) { x.globalAlpha = .6; x.fillStyle = i % 2 ? '#ffb547' : '#b9a2ff'; x.beginPath(); x.arc(120 + Math.sin(t / 300 + i) * 100, 141 + Math.cos(t / 400 + i * 1.3) * 120, 8, 0, 6.283); x.fill(); }
+      n++; if (t < 3000) requestAnimationFrame(f); else { R.c2fps = Math.round(n / (t / 1000)); set('c2fps', R.c2fps + ' fps', R.c2fps >= 30); done(); }
+    })();
+  }
+  glSpeed(function () { code(); c2Speed(code); });
+
+  // ---- tilt sensor (R1 SDK) and motion events
+  (async function () {
+    try {
+      if (window.creationSensors && window.creationSensors.accelerometer) {
+        var ok = await window.creationSensors.accelerometer.isAvailable();
+        if (ok) { var cnt = 0; window.creationSensors.accelerometer.start(function () { cnt++; }, { frequency: 60 });
+          setTimeout(function () { window.creationSensors.accelerometer.stop(); R.acc = 'Y' + Math.round(cnt / 2); set('acc', 'yes, ' + Math.round(cnt / 2) + ' Hz', true); code(); }, 2000); }
+        else { R.acc = 'N'; set('acc', 'present, unavailable', false); }
+      } else { R.acc = 'N'; set('acc', 'not on this firmware', false); }
+    } catch (e) { R.acc = 'ERR'; set('acc', 'error', false); }
+    code();
+  })();
+  var mcount = 0, mpeak = 0, last = null;
+  window.addEventListener('devicemotion', function (e) {
+    mcount++; var a = e.accelerationIncludingGravity || {}; if (last && a.x != null) { var j = Math.hypot(a.x - last.x, a.y - last.y, a.z - last.z); mpeak = Math.max(mpeak, j); }
+    last = { x: a.x || 0, y: a.y || 0, z: a.z || 0 };
+  });
+  setInterval(function () {
+    R.mot = mcount ? 'Y' + Math.round(mpeak) : 'N';
+    set('mot', mcount ? mcount + ' events, peak jerk ' + mpeak.toFixed(1) : 'none yet', mcount > 0); code();
+  }, 1000);
+
+  // ---- hardware buttons
+  var hits = {};
+  ['scrollUp', 'scrollDown', 'sideClick', 'longPressStart', 'longPressEnd'].forEach(function (n) {
+    window.addEventListener(n, function () { hits[n] = (hits[n] || 0) + 1;
+      R.hw = Object.keys(hits).map(function (k) { return { scrollUp: 'U', scrollDown: 'D', sideClick: 'S', longPressStart: 'L', longPressEnd: 'E' }[k] + hits[k]; }).join('');
+      set('hw', R.hw, true); code();
+      if (n === 'sideClick') { var p1 = document.getElementById('p1'), p2 = document.getElementById('p2');
+        var show2 = !p1.hidden; p1.hidden = show2; p2.hidden = !show2; document.getElementById('pg').textContent = show2 ? '2/2' : '1/2'; }
+    });
+  });
+
+  // ---- page 2: camera, storage, LLM bridge
+  var md = navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
+  set('cam', md ? 'API present (tap test)' : 'no getUserMedia', !!md); R.cam = md ? 'API' : 'N';
+  set('sto', window.creationStorage ? 'creationStorage yes' : (window.localStorage ? 'localStorage only' : 'none'), !!(window.creationStorage || window.localStorage));
+  set('llm', typeof PluginMessageHandler !== 'undefined' ? 'PluginMessageHandler yes' : 'not found', typeof PluginMessageHandler !== 'undefined');
+  set('ua', (window.devicePixelRatio || 1) + ' / ' + navigator.userAgent.slice(0, 60), null);
+  document.getElementById('camBtn').addEventListener('click', function () {
+    if (!md) { set('cam', 'no getUserMedia', false); return; }
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 160, height: 120 } }).then(function (s) {
+      var v = document.getElementById('v'); v.srcObject = s; v.style.display = 'block'; v.play();
+      var tr = s.getVideoTracks()[0], st = tr.getSettings ? tr.getSettings() : {};
+      R.cam = 'Y' + (st.width || '') ; set('cam', 'works ' + (st.width || '?') + 'x' + (st.height || '?') + ' ' + (st.facingMode || ''), true); code();
+    }).catch(function (e) { R.cam = 'DENY'; set('cam', 'failed: ' + (e.name || e), false); code(); });
+  });
+
+  // desktop testing: arrow keys / Esc / space act like the R1 controls
+  window.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') window.dispatchEvent(new Event('sideClick'));
+    if (e.key === 'ArrowUp') window.dispatchEvent(new Event('scrollUp'));
+    if (e.key === 'ArrowDown') window.dispatchEvent(new Event('scrollDown'));
+  });
+  code();
+})();
+</script>
+</body>
+</html>
