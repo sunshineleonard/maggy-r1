@@ -7,7 +7,7 @@ const ASSETS = { maggy: "assets/maggy.glb", bg: "assets/far-dusk.jpg", wings: "a
 // ---------------- moods, clips, lines ----------------
 const MOODS = {
   content:   { label: "Content",   color: "#ffb547", glow: .55, clips: ["Idle", "Happy_Idle", "Look_Around", "1_hand_Looking_w_turn", "Neck_Stretching", "Thinking", "Sitting_Idle"],
-               lines: ["Evenin', sugar.", "Porch-sittin' weather.", "I'm just fine in here. Mostly."] },
+               lines: ["Porch-sittin' weather.", "I'm just fine in here. Mostly.", "Ain't this nice."] },
   wants:     { label: "Wants you", color: "#5aa9ff", glow: .6,  clips: ["Waving", "Waving_2_hands", "Um_Helloooo_Knock", "Hey_Sugar"],
                lines: ["Hey. Hey you. Over here.", "Ummm, helloooo?", "You forget about me, darlin'?"] },
   delighted: { label: "Delighted", color: "#b6f25a", glow: .95, clips: ["Happy", "Macarena_Dance"],
@@ -255,6 +255,28 @@ let sayTimer = 0;
 function speak(mood, line) { if (st.talking) return; const l = MOODS[mood].lines; say.textContent = line || l[Math.floor(Math.random() * l.length)];
   say.classList.add("on"); clearTimeout(sayTimer); sayTimer = setTimeout(() => say.classList.remove("on"), 3200); }
 function setTemp(m, ms, line) { st.temp = m; st.tempUntil = performance.now() + ms; speak(m, line); }
+// greetings that fit the time of day and how long you've been gone
+function partOfDay(h = new Date().getHours()) { return h >= 5 && h < 12 ? "morning" : h >= 12 && h < 17 ? "afternoon" : h >= 17 && h < 21 ? "evening" : "late"; }
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const HELLO = {
+  morning:   ["Mornin', sugar.", "Well, good mornin', boss.", "Mornin'. Coffee first, then me.", "Rise and shine, hon."],
+  afternoon: ["Afternoon, sugar.", "Well, hey there, boss.", "Afternoon, hon. Hot one out there?", "There you are."],
+  evening:   ["Evenin', sugar.", "Evenin', boss. Porch light's on.", "Well, evenin', hon.", "Fireflies are out, and so are you."],
+  late:      ["Up late, sugar?", "Night owl, huh, boss?", "Well, ain't you up past your bedtime.", "It's the middle of the night, hon."],
+};
+function greetingNow() {
+  const now = Date.now(); let last = 0;
+  try { last = +localStorage.getItem("maggySeen") || 0; localStorage.setItem("maggySeen", String(now)); } catch (e) {}
+  const away = last ? (now - last) / 3600000 : 0, part = partOfDay(), day = new Date().getDay();
+  if (last && away < 0.1) return pick(["Back already?", "Miss me that quick?", "Well, hey again."]);
+  if (away > 48) return pick(["Well, look who remembered me.", "Days, sugar. Whole days. I counted.", "Thought you forgot about me, boss."]);
+  if (away > 12 && part === "morning") return pick(["Mornin', sugar. I missed you.", "Mornin'. You were gone all night, hon."]);
+  if (part === "morning" && day === 1) return pick(["Mornin'. Monday again, huh?", "Happy Monday, sugar. Bless us both."]);
+  if (part === "afternoon" && day === 5) return pick(["Afternoon, sugar. It's Friday, thank the Lord."]);
+  if ((day === 0 || day === 6) && part !== "late" && Math.random() < .4) return pick(["Happy weekend, sugar.", "Weekend's here, hon. Sit a spell."]);
+  return pick(HELLO[part]);
+}
+function wakeLine() { return { morning: "Mornin', sugar.", afternoon: "Well, I'm up. Was just restin' my eyes.", evening: "Alright, alright, I'm up.", late: "Mmh… it's the middle of the night, hon." }[partOfDay()]; }
 function lightNow() { if (st.light !== "auto") return st.light; const h = new Date().getHours(); return h >= 7 && h < 17 ? "day" : h >= 17 && h < 20 ? "dusk" : "night"; }
 
 function poke() {
@@ -361,7 +383,7 @@ window.addEventListener("scrollUp", () => { if (ui.menuOpen) setVolume(prefs.vol
 window.addEventListener("scrollDown", () => { if (ui.menuOpen) setVolume(prefs.vol - 1); else if (ui.logOpen) scrollLog(48); else peek(.3); });
 // long press (hold the side button): talk to her (when she has her pass code), else a gentle "hey"
 function greet() {
-  if (st.sleep !== "awake") { wake(false); setTemp("content", 4000, "Mornin', sugar."); }
+  if (st.sleep !== "awake") { wake(false); setTemp("content", 4000, wakeLine()); }
   else if (st.auto) setTemp("delighted", 4500, "Well hey there, boss!");
 }
 window.addEventListener("longPressStart", () => {
@@ -690,7 +712,7 @@ function frame() {
   await build();
   $("loading").hidden = true;
   refreshChips(); tick(); setInterval(tick, 250); requestAnimationFrame(frame);
-  setTimeout(() => speak("content", "Evenin', sugar."), 800);
+  setTimeout(() => speak("content", greetingNow()), 800);
   window.__maggy = { st, playClip, poke, fallAsleep, wake, get bg() { return bgMat; }, get face() { return face; } };   // test hook
 } catch (e) {
   $("loading").textContent = "Maggy couldn't load: " + (e && e.message ? e.message : e);
