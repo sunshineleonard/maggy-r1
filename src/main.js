@@ -258,7 +258,7 @@ function setTemp(m, ms, line) { st.temp = m; st.tempUntil = performance.now() + 
 function lightNow() { if (st.light !== "auto") return st.light; const h = new Date().getHours(); return h >= 7 && h < 17 ? "day" : h >= 17 && h < 20 ? "dusk" : "night"; }
 
 function poke() {
-  if (talk.pendingAudio) { const a = talk.pendingAudio; talk.pendingAudio = null; voice.src = a; rateUp(); voice.onended = doneTalking; voice.play().catch(() => doneTalking()); return; }
+  if (talk.pendingQueue) { const q = talk.pendingQueue; talk.pendingQueue = null; hold(say.textContent.replace("  (tap me to hear it)", "")); speakQueue(q).catch(() => doneTalking()); return; }
   if (talk.busy || talk.listening) return;
   const now = performance.now(); st.taps = st.taps.filter(t => now - t < 2500); st.taps.push(now); st.lastTouch = now;
   if (st.sleep !== "awake") { if (!st.auto) { st.auto = true; refreshChips(); } wake(true); return; }
@@ -376,7 +376,7 @@ window.addEventListener("longPressEnd", () => stopListening());
 const RELAY = "https://maggy-voice.sunshineleonard.workers.dev";
 let PASS = null;   // private pass code: arrives once in the install QR (?k=...), then remembered on the R1
 try { const q = new URLSearchParams(location.search).get("k"); if (q) localStorage.setItem("maggyKey", q); PASS = localStorage.getItem("maggyKey"); } catch (e) {}
-const talk = { busy: false, listening: false, rec: null, chunks: [], t0: 0, stream: null, stopAsked: false, history: [], pendingAudio: null };
+const talk = { busy: false, listening: false, rec: null, chunks: [], t0: 0, stream: null, stopAsked: false, history: [], pendingQueue: null };
 const voice = new Audio(); voice.preload = "auto";
 const VOICE_RATE = 1.08;   // user pick: her voice 8% faster, same pitch
 function rateUp() { voice.defaultPlaybackRate = VOICE_RATE; voice.playbackRate = VOICE_RATE; voice.preservesPitch = true; voice.webkitPreservesPitch = true; }
@@ -441,14 +441,15 @@ async function finishListening(mime) {
   try {
     const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.onerror = rej; r.readAsDataURL(blob); });
     stage_("sent: " + Math.round(blob.size / 1024) + " KB, waiting on words…");
-    const j = await relay("/talk", { audio: b64, mime, mood: moodNow(), history: talk.history.slice(-6), speak: false });
+    const j = await relay("/talk", { audio: b64, mime, mood: moodNow(), when: localWhen(), history: talk.history.slice(-6), speak: false });
     talk.history.push({ who: "boss", text: j.heard }, { who: "maggy", text: j.reply }); talk.history = talk.history.slice(-12);
     st.clipLock = false; st.temp = j.mood; st.tempUntil = performance.now() + 60000; hold(j.reply);
     if (j.mood === st.mood) { const clip = pickFrom(j.mood); if (clip) playClip(clip, .5); }
     stage_("heard: \"" + j.heard.slice(0, 60) + "\" · making voice…");
-    const v = await relay("/say", { text: j.reply });
-    stage_("voice: playing");
-    playVoice("data:audio/wav;base64," + v.audio);
+    // voice each sentence in parallel and play them in order: she starts talking as soon as the first one is ready
+    const jobs = sentences(j.reply).map(t => relay("/say", { text: t }));
+    jobs.forEach(p => p.catch(() => {}));
+    await speakQueue(jobs);
   } catch (e) { console.warn(e); stage_("error: " + String(e.message || e).slice(0, 80)); oops(/401/.test(String(e)) ? "Who're you? I don't know that pass code." : "My jar's got bad reception. Try me again?"); }
 }
 async function relay(path, body) {
@@ -460,11 +461,27 @@ async function relay(path, body) {
     return j;
   } finally { clearTimeout(timer); }
 }
-function playVoice(src) {
-  voice.src = src; rateUp(); voice.onended = doneTalking;
-  voice.play().then(() => { talk.pendingAudio = null; }).catch(e => { stage_("voice blocked: " + (e.name || e));  talk.pendingAudio = src; hold(say.textContent + "  (tap me to hear it)"); });
+function localWhen() { try { return new Date().toLocaleString("en-US", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" }); } catch (e) { return String(new Date()); } }
+function sentences(text) {   // split into sentences; fold short bits into the next so each voiced piece sounds natural
+  const raw = (String(text).match(/[^.!?…]+[.!?…]+["')\]]*\s*|[^.!?…]+$/g) || [String(text)]).map(x => x.trim()).filter(Boolean);
+  const out = []; let buf = "";
+  for (const r of raw) { buf = buf ? buf + " " + r : r; if (buf.length >= 30) { out.push(buf); buf = ""; } }
+  if (buf) { if (out.length) out[out.length - 1] += " " + buf; else out.push(buf); }
+  return out.slice(0, 4).concat(out.length > 4 ? [out.slice(4).join(" ")] : []).filter(Boolean);
 }
-function doneTalking() { talk.busy = false; st.talking = false; st.lastTouch = performance.now(); st.tempUntil = performance.now() + 5000; release(1800); }
+function playOne(src) {   // resolves true when it finished, false if the WebView blocked playback
+  return new Promise(res => { voice.src = src; rateUp(); voice.onended = () => res(true); voice.onerror = () => res(true);
+    voice.play().catch(e => { stage_("voice blocked: " + (e.name || e)); res(false); }); });
+}
+async function speakQueue(jobs) {
+  for (let i = 0; i < jobs.length; i++) {
+    let v; try { v = await jobs[i]; } catch (e) { if (i === 0) throw e; break; }
+    stage_("voice: " + (i + 1) + "/" + jobs.length);
+    if (!(await playOne("data:audio/wav;base64," + v.audio))) { talk.pendingQueue = jobs.slice(i); hold(say.textContent + "  (tap me to hear it)"); return; }
+  }
+  doneTalking();
+}
+function doneTalking() { stage_("done · hold the button or the jar to talk"); talk.busy = false; st.talking = false; st.lastTouch = performance.now(); st.tempUntil = performance.now() + 5000; release(1800); }
 // shake: gentle shake wakes her; a hard shake makes her mad (R1 motion events: peak jolt ~40 when shaken hard)
 let lastAcc = null, shakeCooldown = 0;
 window.addEventListener("devicemotion", e => {
