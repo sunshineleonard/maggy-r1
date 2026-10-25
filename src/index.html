@@ -15,6 +15,7 @@
     font: 700 16px/1.15 "Comic Sans MS", "Chalkboard SE", "Segoe Print", cursive; color: #fff6ea;
     text-shadow: 0 0 6px var(--mood), 0 1px 3px rgba(0,0,0,.9); opacity: 0; transform: translateY(6px); transition: opacity .35s, transform .35s; }
   .say.on { opacity: 1; transform: none; }
+  .dbg { position: absolute; left: 6px; right: 6px; bottom: 3px; margin: 0; font: 9px/1.2 ui-monospace, monospace; color: rgba(255,246,234,.55); pointer-events: none; text-shadow: 0 1px 2px #000; }
   .say.long { font-size: 13px; line-height: 1.2; top: 22px; }
   .loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 20px;
     color: #a8968a; font-size: 13px; background: #0e0e10; }
@@ -26,6 +27,7 @@
 <main class="stage" id="stage">
   <canvas id="c" aria-label="Maggy in her jar"></canvas>
   <p class="say" id="say" aria-live="polite"></p>
+  <p class="dbg" id="dbg"></p>
   <div class="loading" id="loading">Waking Maggy up…</div>
 </main>
 <!-- the desktop page's test controls; kept hidden so the shared scene code runs unchanged -->

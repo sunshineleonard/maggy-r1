@@ -252,7 +252,7 @@ const st = { auto: true, manual: "content", mood: null, temp: null, tempUntil: 0
   nextSass: performance.now() + 60000, sleep: "awake", sleepT: 0, flight: 0,
   posFrom: new THREE.Vector3(), posTo: new THREE.Vector3(), qFrom: new THREE.Quaternion(), qTo: new THREE.Quaternion() };
 let sayTimer = 0;
-function speak(mood, line) { const l = MOODS[mood].lines; say.textContent = line || l[Math.floor(Math.random() * l.length)];
+function speak(mood, line) { if (st.talking) return; const l = MOODS[mood].lines; say.textContent = line || l[Math.floor(Math.random() * l.length)];
   say.classList.add("on"); clearTimeout(sayTimer); sayTimer = setTimeout(() => say.classList.remove("on"), 3200); }
 function setTemp(m, ms, line) { st.temp = m; st.tempUntil = performance.now() + ms; speak(m, line); }
 function lightNow() { if (st.light !== "auto") return st.light; const h = new Date().getHours(); return h >= 7 && h < 17 ? "day" : h >= 17 && h < 20 ? "dusk" : "night"; }
@@ -342,8 +342,15 @@ let tx = 0, ty = 0, cx = 0, cy = 0, lastPointer = -1e9, down = null;
 function aim(e) { const r = stage.getBoundingClientRect(); tx = Math.max(-1, Math.min(1, ((e.clientX - r.left) / r.width - .5) * 2));
   ty = Math.max(-1, Math.min(1, ((e.clientY - r.top) / r.height - .5) * 2)); lastPointer = performance.now(); }
 stage.addEventListener("pointermove", aim);
-stage.addEventListener("pointerdown", e => { aim(e); down = { x: e.clientX, y: e.clientY, t: performance.now() }; });
-stage.addEventListener("pointerup", e => { if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 10 && performance.now() - down.t < 450) poke(); down = null; });
+let holdTimer = 0, touchTalk = false;
+stage.addEventListener("pointerdown", e => { aim(e); down = { x: e.clientX, y: e.clientY, t: performance.now() };
+  openMic();   // a touch counts as permission to use the mic: get it ready now
+  clearTimeout(holdTimer); holdTimer = setTimeout(() => { if (down && PASS && !talk.busy) { touchTalk = true; st.lastTouch = performance.now(); if (st.sleep !== "awake") wake(false); startListening(); } }, 500); });
+stage.addEventListener("pointermove", e => { if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 12) clearTimeout(holdTimer); });
+function endTouch(e) { clearTimeout(holdTimer);
+  if (touchTalk) { touchTalk = false; down = null; stopListening(); return; }
+  if (e.type === "pointerup" && down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 10 && performance.now() - down.t < 450) poke(); down = null; }
+stage.addEventListener("pointerup", endTouch); stage.addEventListener("pointercancel", endTouch);
 stage.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); poke(); } });
 stage.tabIndex = 0;
 
@@ -386,41 +393,63 @@ function release(ms = 1500) { clearTimeout(sayTimer); sayTimer = setTimeout(() =
 function moodNow() { return st.temp || st.mood || "content"; }
 function oops(line) { talk.busy = false; talk.listening = false; st.talking = false; st.clipLock = false; st.temp = "sassy"; st.tempUntil = performance.now() + 5000; hold(line); release(4000); }
 
+function stage_(s) { const d = $("dbg"); if (d) d.textContent = s; }
+const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(what + " timeout")), ms))]);
+function micLive() { const t = talk.stream && talk.stream.getAudioTracks()[0]; return !!t && t.readyState === "live"; }
+let micAsk = null;
+function openMic() {
+  if (!PASS || micLive()) return Promise.resolve(talk.stream);
+  if (micAsk) return micAsk;
+  stage_("mic: asking");
+  micAsk = withTimeout(navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }), 6000, "mic")
+    .then(s => { talk.stream = s; stage_("mic: ready"); return s; })
+    .finally(() => { micAsk = null; });
+  micAsk.catch(e => stage_("mic: " + (e.name || e.message)));
+  return micAsk;
+}
 async function startListening() {
   if (talk.listening) return;
   talk.listening = true; talk.stopAsked = false; talk.chunks = []; st.talking = true;
   st.temp = "wants"; st.tempUntil = performance.now() + 60000; hold("I'm listenin', sugar…"); st.clipLock = true; playClip("Idle", .3);
-  try {
-    talk.stream ||= await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-  } catch (e) { return oops("Can't hear a thing, hon. Mic's off."); }
+  try { await openMic(); if (!micLive()) throw new Error("mic not live"); }
+  catch (e) { stage_("mic failed: " + (e.message || e.name)); return oops(talk.stopAsked ? "I couldn't get to the mic in time, sugar. Tap me once, then try." : "Can't hear a thing, hon. Mic's off."); }
   try {
     const rec = talk.rec = new MediaRecorder(talk.stream);
     rec.ondataavailable = e => { if (e.data && e.data.size) talk.chunks.push(e.data); };
     rec.onstop = () => finishListening(rec.mimeType || "audio/webm");
-    rec.start(); talk.t0 = performance.now();
+    rec.start(250); talk.t0 = performance.now(); stage_("rec: on");
     if (talk.stopAsked) stopListening();
     setTimeout(() => { if (talk.rec === rec && rec.state === "recording") rec.stop(); }, 20000);   // cap at 20 s
   } catch (e) { oops("My ears ain't workin' right now."); }
 }
 function stopListening() {
   if (!talk.listening) return;
-  talk.stopAsked = true;
+  talk.stopAsked = true; stage_(talk.rec ? "rec: stopping" : "rec: stop asked before mic was ready");
   if (talk.rec && talk.rec.state === "recording") talk.rec.stop();
+  setTimeout(() => {   // watchdog: never stay stuck on "listenin'"
+    if (!talk.listening) return;
+    if (talk.rec && talk.rec.state !== "inactive") { stage_("rec: forced stop"); try { talk.rec.stop(); } catch (e) {} }
+    setTimeout(() => { if (talk.listening) { stage_("rec: never stopped"); oops("Hold on, my ears got stuck. Try me again?"); } }, 1500);
+  }, 2500);
 }
 async function finishListening(mime) {
   talk.listening = false; const rec = talk.rec; talk.rec = null;
   const ms = performance.now() - talk.t0, blob = new Blob(talk.chunks, { type: mime });
+  stage_("rec: " + (ms / 1000).toFixed(1) + "s, " + Math.round(blob.size / 1024) + " KB");
   if (ms < 700 || blob.size < 2000) { st.temp = null; st.talking = false; st.clipLock = false; release(0); greet(); return; }   // just a tap of the button: old hello
   talk.busy = true; st.temp = "content"; st.tempUntil = performance.now() + 60000; hold("Hmm…"); st.clipLock = true; playClip("Thinking", .4);
   try {
     const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.onerror = rej; r.readAsDataURL(blob); });
+    stage_("sent: " + Math.round(blob.size / 1024) + " KB, waiting on words…");
     const j = await relay("/talk", { audio: b64, mime, mood: moodNow(), history: talk.history.slice(-6), speak: false });
     talk.history.push({ who: "boss", text: j.heard }, { who: "maggy", text: j.reply }); talk.history = talk.history.slice(-12);
     st.clipLock = false; st.temp = j.mood; st.tempUntil = performance.now() + 60000; hold(j.reply);
     if (j.mood === st.mood) { const clip = pickFrom(j.mood); if (clip) playClip(clip, .5); }
+    stage_("heard: \"" + j.heard.slice(0, 60) + "\" · making voice…");
     const v = await relay("/say", { text: j.reply });
+    stage_("voice: playing");
     playVoice("data:audio/wav;base64," + v.audio);
-  } catch (e) { console.warn(e); oops(/401/.test(String(e)) ? "Who're you? I don't know that pass code." : "My jar's got bad reception. Try me again?"); }
+  } catch (e) { console.warn(e); stage_("error: " + String(e.message || e).slice(0, 80)); oops(/401/.test(String(e)) ? "Who're you? I don't know that pass code." : "My jar's got bad reception. Try me again?"); }
 }
 async function relay(path, body) {
   const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 45000);
@@ -433,7 +462,7 @@ async function relay(path, body) {
 }
 function playVoice(src) {
   voice.src = src; rateUp(); voice.onended = doneTalking;
-  voice.play().then(() => { talk.pendingAudio = null; }).catch(() => { talk.pendingAudio = src; hold(say.textContent + "  (tap me to hear it)"); });
+  voice.play().then(() => { talk.pendingAudio = null; }).catch(e => { stage_("voice blocked: " + (e.name || e));  talk.pendingAudio = src; hold(say.textContent + "  (tap me to hear it)"); });
 }
 function doneTalking() { talk.busy = false; st.talking = false; st.lastTouch = performance.now(); st.tempUntil = performance.now() + 5000; release(1800); }
 // shake: gentle shake wakes her; a hard shake makes her mad (R1 motion events: peak jolt ~40 when shaken hard)
