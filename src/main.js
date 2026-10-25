@@ -258,6 +258,8 @@ function setTemp(m, ms, line) { st.temp = m; st.tempUntil = performance.now() + 
 function lightNow() { if (st.light !== "auto") return st.light; const h = new Date().getHours(); return h >= 7 && h < 17 ? "day" : h >= 17 && h < 20 ? "dusk" : "night"; }
 
 function poke() {
+  if (talk.pendingAudio) { const a = talk.pendingAudio; talk.pendingAudio = null; voice.src = a; voice.onended = doneTalking; voice.play().catch(() => doneTalking()); return; }
+  if (talk.busy || talk.listening) return;
   const now = performance.now(); st.taps = st.taps.filter(t => now - t < 2500); st.taps.push(now); st.lastTouch = now;
   if (st.sleep !== "awake") { if (!st.auto) { st.auto = true; refreshChips(); } wake(true); return; }
   if (!st.auto) { speak(st.manual); return; }
@@ -311,7 +313,7 @@ function tick() {
   if (mood === "annoyed") glow += .06 * Math.sin(now / 90);
   const L = lightNow(); st.glow = Math.max(0, Math.min(1.15, glow * LIGHT[L].k)); st.L = L;
   if (mood !== st.mood) { const prev = st.mood; st.mood = mood; showMood(mood, prev); }
-  else if (st.sleep === "awake" && now > clipUntil) playClip(pickFrom(mood));
+  else if (st.sleep === "awake" && now > clipUntil && !st.clipLock) playClip(pickFrom(mood));
   $("why").textContent = st.sleep !== "awake" ? `napping (${st.sleep})` : !st.auto ? "held by test control"
     : mood === "wants" ? `ignored ${Math.round(idle)}s, glowing brighter` : st.temp ? "reacting to you" : `idle ${Math.round(idle)}s · ${LIGHT[L].label.toLowerCase()}`;
 }
@@ -319,8 +321,8 @@ const moodColor = new THREE.Color(0xffb547), targetColor = new THREE.Color(0xffb
 function showMood(mood, prev) {
   targetColor.set(MOODS[mood].color); root.style.setProperty("--mood", MOODS[mood].color);
   $("moodName").textContent = MOODS[mood].label;
-  if (st.sleep === "awake") playClip(pickFrom(mood), .45);
-  if (st.auto && prev && mood === "wants") speak(mood);
+  if (st.sleep === "awake" && !st.clipLock) playClip(pickFrom(mood), .45);
+  if (st.auto && prev && mood === "wants" && !st.talking) speak(mood);
 }
 
 // ---------------- controls ----------------
@@ -350,12 +352,88 @@ stage.tabIndex = 0;
 function peek(d) { tx = Math.max(-1, Math.min(1, tx + d)); ty = 0; lastPointer = performance.now() + 3000; }
 window.addEventListener("scrollUp", () => peek(-.3));
 window.addEventListener("scrollDown", () => peek(.3));
-// long press (hold the side button): a gentle "hey" that wakes her nicely instead of rudely
-window.addEventListener("longPressStart", () => {
-  st.lastTouch = performance.now();
+// long press (hold the side button): talk to her (when she has her pass code), else a gentle "hey"
+function greet() {
   if (st.sleep !== "awake") { wake(false); setTemp("content", 4000, "Mornin', sugar."); }
   else if (st.auto) setTemp("delighted", 4500, "Well hey there, boss!");
+}
+window.addEventListener("longPressStart", () => {
+  st.lastTouch = performance.now();
+  if (!PASS || talk.busy) { if (!talk.busy) greet(); return; }
+  if (st.sleep !== "awake") wake(false);
+  startListening();
 });
+window.addEventListener("longPressEnd", () => stopListening());
+
+// ---------------- talking: hold to talk -> relay (Gemini hears + replies as Maggy) -> her words, then her voice ----------------
+const RELAY = "https://maggy-voice.sunshineleonard.workers.dev";
+let PASS = null;   // private pass code: arrives once in the install QR (?k=...), then remembered on the R1
+try { const q = new URLSearchParams(location.search).get("k"); if (q) localStorage.setItem("maggyKey", q); PASS = localStorage.getItem("maggyKey"); } catch (e) {}
+const talk = { busy: false, listening: false, rec: null, chunks: [], t0: 0, stream: null, stopAsked: false, history: [], pendingAudio: null };
+const voice = new Audio(); voice.preload = "auto";
+let audioUnlocked = false;
+function silentWav() { const n = 2400, b = new ArrayBuffer(44 + n * 2), v = new DataView(b), w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); w(8, "WAVE"); w(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 24000, true); v.setUint32(28, 48000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, "data"); v.setUint32(40, n * 2, true);
+  let s = ""; new Uint8Array(b).forEach(x => s += String.fromCharCode(x)); return "data:audio/wav;base64," + btoa(s); }
+function unlockAudio() {   // browsers only let sound play after a touch: play a blip of silence on the first tap
+  if (audioUnlocked) return; audioUnlocked = true; voice.src = silentWav(); voice.play().catch(() => { audioUnlocked = false; }); }
+window.addEventListener("pointerdown", unlockAudio, { capture: true });
+function hold(text) { say.textContent = text; say.classList.toggle("long", text.length > 70); say.classList.add("on"); clearTimeout(sayTimer); }
+function release(ms = 1500) { clearTimeout(sayTimer); sayTimer = setTimeout(() => { say.classList.remove("on", "long"); }, ms); }
+function moodNow() { return st.temp || st.mood || "content"; }
+function oops(line) { talk.busy = false; talk.listening = false; st.talking = false; st.clipLock = false; st.temp = "sassy"; st.tempUntil = performance.now() + 5000; hold(line); release(4000); }
+
+async function startListening() {
+  if (talk.listening) return;
+  talk.listening = true; talk.stopAsked = false; talk.chunks = []; st.talking = true;
+  st.temp = "wants"; st.tempUntil = performance.now() + 60000; hold("I'm listenin', sugar…"); st.clipLock = true; playClip("Idle", .3);
+  try {
+    talk.stream ||= await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  } catch (e) { return oops("Can't hear a thing, hon. Mic's off."); }
+  try {
+    const rec = talk.rec = new MediaRecorder(talk.stream);
+    rec.ondataavailable = e => { if (e.data && e.data.size) talk.chunks.push(e.data); };
+    rec.onstop = () => finishListening(rec.mimeType || "audio/webm");
+    rec.start(); talk.t0 = performance.now();
+    if (talk.stopAsked) stopListening();
+    setTimeout(() => { if (talk.rec === rec && rec.state === "recording") rec.stop(); }, 20000);   // cap at 20 s
+  } catch (e) { oops("My ears ain't workin' right now."); }
+}
+function stopListening() {
+  if (!talk.listening) return;
+  talk.stopAsked = true;
+  if (talk.rec && talk.rec.state === "recording") talk.rec.stop();
+}
+async function finishListening(mime) {
+  talk.listening = false; const rec = talk.rec; talk.rec = null;
+  const ms = performance.now() - talk.t0, blob = new Blob(talk.chunks, { type: mime });
+  if (ms < 700 || blob.size < 2000) { st.temp = null; st.talking = false; st.clipLock = false; release(0); greet(); return; }   // just a tap of the button: old hello
+  talk.busy = true; st.temp = "content"; st.tempUntil = performance.now() + 60000; hold("Hmm…"); st.clipLock = true; playClip("Thinking", .4);
+  try {
+    const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.onerror = rej; r.readAsDataURL(blob); });
+    const j = await relay("/talk", { audio: b64, mime, mood: moodNow(), history: talk.history.slice(-6), speak: false });
+    talk.history.push({ who: "boss", text: j.heard }, { who: "maggy", text: j.reply }); talk.history = talk.history.slice(-12);
+    st.clipLock = false; st.temp = j.mood; st.tempUntil = performance.now() + 60000; hold(j.reply);
+    if (j.mood === st.mood) { const clip = pickFrom(j.mood); if (clip) playClip(clip, .5); }
+    const v = await relay("/say", { text: j.reply });
+    playVoice("data:audio/wav;base64," + v.audio);
+  } catch (e) { console.warn(e); oops(/401/.test(String(e)) ? "Who're you? I don't know that pass code." : "My jar's got bad reception. Try me again?"); }
+}
+async function relay(path, body) {
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 45000);
+  try {
+    const r = await fetch(RELAY + path, { method: "POST", headers: { "Content-Type": "application/json", "X-Maggy-Key": PASS }, body: JSON.stringify(body), signal: ctl.signal });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(r.status + " " + (j.error || ""));
+    return j;
+  } finally { clearTimeout(timer); }
+}
+function playVoice(src) {
+  voice.src = src; voice.onended = doneTalking;
+  voice.play().then(() => { talk.pendingAudio = null; }).catch(() => { talk.pendingAudio = src; hold(say.textContent + "  (tap me to hear it)"); });
+}
+function doneTalking() { talk.busy = false; st.talking = false; st.lastTouch = performance.now(); st.tempUntil = performance.now() + 5000; release(1800); }
 // shake: gentle shake wakes her; a hard shake makes her mad (R1 motion events: peak jolt ~40 when shaken hard)
 let lastAcc = null, shakeCooldown = 0;
 window.addEventListener("devicemotion", e => {
@@ -376,8 +454,9 @@ window.addEventListener("devicemotion", e => {
 window.addEventListener("keydown", e => {
   if (e.key === "ArrowUp") window.dispatchEvent(new Event("scrollUp"));
   if (e.key === "ArrowDown") window.dispatchEvent(new Event("scrollDown"));
-  if (e.key === "l") window.dispatchEvent(new Event("longPressStart"));
+  if (e.key === "l" && !e.repeat) window.dispatchEvent(new Event("longPressStart"));
 });
+window.addEventListener("keyup", e => { if (e.key === "l") window.dispatchEvent(new Event("longPressEnd")); });
 
 // ---------------- frame loop ----------------
 const clock = new THREE.Clock(); let frames = 0, acc = 0, nextZ = 0;
