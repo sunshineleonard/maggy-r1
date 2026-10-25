@@ -15,19 +15,57 @@
     font: 700 16px/1.15 "Comic Sans MS", "Chalkboard SE", "Segoe Print", cursive; color: #fff6ea;
     text-shadow: 0 0 6px var(--mood), 0 1px 3px rgba(0,0,0,.9); opacity: 0; transform: translateY(6px); transition: opacity .35s, transform .35s; }
   .say.on { opacity: 1; transform: none; }
-  .dbg { position: absolute; left: 6px; right: 6px; bottom: 3px; margin: 0; font: 9px/1.2 ui-monospace, monospace; color: rgba(255,246,234,.55); pointer-events: none; text-shadow: 0 1px 2px #000; }
+  .steps { position: absolute; left: 6px; right: 6px; bottom: 3px; margin: 0; font: 9px/1.2 ui-monospace, monospace; color: rgba(255,246,234,.55); pointer-events: none; text-shadow: 0 1px 2px #000; }
   .say.long { font-size: 13px; line-height: 1.2; top: 22px; }
   .loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 20px;
     color: #a8968a; font-size: 13px; background: #0e0e10; }
   .hidden-panel { display: none; }
   [hidden] { display: none !important; }
+  /* menu button + settings panel */
+  .menu-btn { position: absolute; top: 6px; right: 6px; width: 30px; height: 30px; border-radius: 50%; border: 0; z-index: 20;
+    background: rgba(14,14,16,.55); color: #fff6ea; font: 700 16px/30px -apple-system, "Segoe UI", sans-serif; padding: 0; box-shadow: 0 0 0 1px rgba(255,246,234,.25); }
+  .menu { position: absolute; inset: 0; z-index: 30; background: rgba(10,9,12,.9); padding: 10px 12px; box-sizing: border-box; display: flex; flex-direction: column; gap: 7px; }
+  .menu h2 { margin: 0 0 2px; font-size: 14px; color: var(--mood); }
+  .menu .row { display: flex; align-items: center; gap: 6px; }
+  .menu button { font: 600 13px -apple-system, "Segoe UI", sans-serif; color: #fff6ea; background: #2a2630; border: 0; border-radius: 8px; padding: 0 10px; min-height: 34px; }
+  .menu button.wide { width: 100%; text-align: left; }
+  .menu button[aria-pressed="true"] { background: #4a3a20; }
+  .menu button:disabled { opacity: .4; }
+  .vol { flex: 1; text-align: center; font: 12px ui-monospace, monospace; color: #ffb547; }
+  .vol small { display: block; color: #a8968a; font-size: 10px; }
+  .hint { font-size: 10px; color: #a8968a; margin: 0; }
+  /* transcript: terminal look; .turnR/.turnL = R1 held sideways */
+  .log { position: absolute; left: 0; top: 0; width: 240px; height: 292px; z-index: 40; background: #050806; color: #8dff9a; box-sizing: border-box;
+    display: flex; flex-direction: column; font: 11px/1.35 ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  .log.turnR, .log.turnL { width: 292px; height: 240px; left: -26px; top: 26px; }
+  .log.turnR { transform: rotate(90deg); } .log.turnL { transform: rotate(-90deg); }
+  .log-top { display: flex; justify-content: space-between; align-items: center; padding: 4px 6px; border-bottom: 1px solid #1d3a22; color: #ffb547; }
+  .log-top button { font: 11px ui-monospace, monospace; color: #8dff9a; background: #102414; border: 0; border-radius: 4px; padding: 4px 7px; margin-left: 4px; }
+  .log-body { flex: 1; overflow-y: auto; padding: 4px 7px 10px; white-space: pre-wrap; word-break: break-word; }
+  .log .ln { margin: 0 0 5px; } .log .you { color: #e6f7ff; } .log .maggy { color: #8dff9a; } .log .sys { color: #ff8a7a; }
+  .log .ts { color: #3f7a48; font-size: 9px; } .log .day { color: #ffb547; text-align: center; margin: 4px 0; font-size: 10px; }
 </style>
 </head>
 <body>
 <main class="stage" id="stage">
   <canvas id="c" aria-label="Maggy in her jar"></canvas>
   <p class="say" id="say" aria-live="polite"></p>
-  <p class="dbg" id="dbg"></p>
+  <p class="steps" id="steps"></p>
+  <button class="menu-btn" id="menuBtn" type="button" aria-label="Menu">☰</button>
+  <div class="menu" id="menu" hidden>
+    <div class="row"><h2 style="flex:1">Maggy's settings</h2><button id="closeMenu" type="button" aria-label="Close menu">✕</button></div>
+    <div class="row"><button id="volDown" type="button" aria-label="Quieter">−</button>
+      <div class="vol"><span id="volBars"></span><small>volume <span id="volNum"></span></small></div>
+      <button id="volUp" type="button" aria-label="Louder">+</button></div>
+    <button class="wide" id="muteBtn" type="button" aria-pressed="false">Voice: ON</button>
+    <div class="row"><button class="wide" id="replayBtn" type="button" style="flex:1">Say again (free)</button><button class="wide" id="logBtn" type="button" style="flex:1">Transcript</button></div>
+    <button class="wide" id="trackBtn" type="button" aria-pressed="false">Head tracking: OFF</button>
+    <p class="hint">Head tracking uses the camera and more battery. Turn the R1 sideways for the transcript.</p>
+  </div>
+  <section class="log" id="log" hidden aria-label="Transcript">
+    <div class="log-top"><span>maggy@jar:~$ log</span><span><button id="logClear" type="button">clear</button><button id="logClose" type="button">close</button></span></div>
+    <div class="log-body" id="logBody"></div>
+  </section>
   <div class="loading" id="loading">Waking Maggy up…</div>
 </main>
 <!-- the desktop page's test controls; kept hidden so the shared scene code runs unchanged -->
@@ -35,6 +73,7 @@
   <b id="moodName"></b><b id="clipName"></b><span id="why"></span><b id="fps"></b>
   <div id="moodRow"></div><div id="lightRow"></div>
 </section>
-<script src="app.js?v=202610250245"></script>
+<script>window.MAGGY_BUILD = "202610250809";</script>
+<script src="app.js?v=202610250809"></script>
 </body>
 </html>

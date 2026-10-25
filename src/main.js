@@ -10,7 +10,7 @@ const MOODS = {
                lines: ["Evenin', sugar.", "Porch-sittin' weather.", "I'm just fine in here. Mostly."] },
   wants:     { label: "Wants you", color: "#5aa9ff", glow: .6,  clips: ["Waving", "Waving_2_hands", "Um_Helloooo_Knock", "Hey_Sugar"],
                lines: ["Hey. Hey you. Over here.", "Ummm, helloooo?", "You forget about me, darlin'?"] },
-  delighted: { label: "Delighted", color: "#b6f25a", glow: .95, clips: ["Happy", "Baseball_Hit", "Macarena_Dance"],
+  delighted: { label: "Delighted", color: "#b6f25a", glow: .95, clips: ["Happy", "Macarena_Dance"],
                lines: ["Well hey there!", "There you are!", "Now that's what I'm talkin' about!"] },
   sassy:     { label: "Sassy",     color: "#ff6fb5", glow: .7,  clips: ["Shrugging", "No", "Shaking_Head_No"],
                lines: ["Well, bless your heart.", "Don't you sugar me.", "I could fix your schedule. I won't. But I could."] },
@@ -357,15 +357,15 @@ stage.tabIndex = 0;
 // ---------------- R1 hardware ----------------
 // scroll wheel: peek around her (holds the view a few seconds, then she drifts back)
 function peek(d) { tx = Math.max(-1, Math.min(1, tx + d)); ty = 0; lastPointer = performance.now() + 3000; }
-window.addEventListener("scrollUp", () => peek(-.3));
-window.addEventListener("scrollDown", () => peek(.3));
+window.addEventListener("scrollUp", () => { if (ui.menuOpen) setVolume(prefs.vol + 1); else if (ui.logOpen) scrollLog(-48); else peek(-.3); });
+window.addEventListener("scrollDown", () => { if (ui.menuOpen) setVolume(prefs.vol - 1); else if (ui.logOpen) scrollLog(48); else peek(.3); });
 // long press (hold the side button): talk to her (when she has her pass code), else a gentle "hey"
 function greet() {
   if (st.sleep !== "awake") { wake(false); setTemp("content", 4000, "Mornin', sugar."); }
   else if (st.auto) setTemp("delighted", 4500, "Well hey there, boss!");
 }
 window.addEventListener("longPressStart", () => {
-  st.lastTouch = performance.now();
+  st.lastTouch = performance.now(); closeMenu(); if (ui.logOpen && !ui.logByTilt) closeLog();
   if (!PASS || talk.busy) { if (!talk.busy) greet(); return; }
   if (st.sleep !== "awake") wake(false);
   startListening();
@@ -379,7 +379,7 @@ try { const q = new URLSearchParams(location.search).get("k"); if (q) localStora
 const talk = { busy: false, listening: false, rec: null, chunks: [], t0: 0, stream: null, stopAsked: false, history: [], pendingQueue: null };
 const voice = new Audio(); voice.preload = "auto";
 const VOICE_RATE = 1.08;   // user pick: her voice 8% faster, same pitch
-function rateUp() { voice.defaultPlaybackRate = VOICE_RATE; voice.playbackRate = VOICE_RATE; voice.preservesPitch = true; voice.webkitPreservesPitch = true; }
+function rateUp() { voice.volume = prefs.muted ? 0 : prefs.vol / 10; voice.defaultPlaybackRate = VOICE_RATE; voice.playbackRate = VOICE_RATE; voice.preservesPitch = true; voice.webkitPreservesPitch = true; }
 let audioUnlocked = false;
 function silentWav() { const n = 2400, b = new ArrayBuffer(44 + n * 2), v = new DataView(b), w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
   w(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); w(8, "WAVE"); w(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
@@ -393,7 +393,7 @@ function release(ms = 1500) { clearTimeout(sayTimer); sayTimer = setTimeout(() =
 function moodNow() { return st.temp || st.mood || "content"; }
 function oops(line) { talk.busy = false; talk.listening = false; st.talking = false; st.clipLock = false; st.temp = "sassy"; st.tempUntil = performance.now() + 5000; hold(line); release(4000); }
 
-function stage_(s) { const d = $("dbg"); if (d) d.textContent = s; }
+function stage_(s) { const d = $("steps"); if (d) d.textContent = s; }
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(what + " timeout")), ms))]);
 function micLive() { const t = talk.stream && talk.stream.getAudioTracks()[0]; return !!t && t.readyState === "live"; }
 let micAsk = null;
@@ -443,14 +443,18 @@ async function finishListening(mime) {
     stage_("sent: " + Math.round(blob.size / 1024) + " KB, waiting on words…");
     const j = await relay("/talk", { audio: b64, mime, mood: moodNow(), when: localWhen(), history: talk.history.slice(-6), speak: false });
     talk.history.push({ who: "boss", text: j.heard }, { who: "maggy", text: j.reply }); talk.history = talk.history.slice(-12);
+    logLine("you", j.heard); logLine("maggy", j.reply); lastReply = { text: j.reply, voice: [] };
     st.clipLock = false; st.temp = j.mood; st.tempUntil = performance.now() + 60000; hold(j.reply);
     if (j.mood === st.mood) { const clip = pickFrom(j.mood); if (clip) playClip(clip, .5); }
+    if (prefs.muted) {   // muted: words only, never ask for her voice (saves the voice cost)
+      stage_("muted: text only"); setTimeout(doneTalking, Math.max(4000, j.reply.length * 70)); return;
+    }
     stage_("heard: \"" + j.heard.slice(0, 60) + "\" · making voice…");
     // voice each sentence in parallel and play them in order: she starts talking as soon as the first one is ready
     const jobs = sentences(j.reply).map(t => relay("/say", { text: t }));
-    jobs.forEach(p => p.catch(() => {}));
+    jobs.forEach((p, i) => p.then(v => { if (lastReply) lastReply.voice[i] = v.audio; }).catch(() => {}));
     await speakQueue(jobs);
-  } catch (e) { console.warn(e); stage_("error: " + String(e.message || e).slice(0, 80)); oops(/401/.test(String(e)) ? "Who're you? I don't know that pass code." : "My jar's got bad reception. Try me again?"); }
+  } catch (e) { console.warn(e); stage_("error: " + String(e.message || e).slice(0, 80)); logLine("sys", "error: " + String(e.message || e).slice(0, 200)); oops(/401/.test(String(e)) ? "Who're you? I don't know that pass code." : "My jar's got bad reception. Try me again?"); }
 }
 async function relay(path, body) {
   const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 45000);
@@ -505,6 +509,108 @@ window.addEventListener("keydown", e => {
   if (e.key === "l" && !e.repeat) window.dispatchEvent(new Event("longPressStart"));
 });
 window.addEventListener("keyup", e => { if (e.key === "l") window.dispatchEvent(new Event("longPressEnd")); });
+
+// ---------------- settings menu, transcript, head tracking ----------------
+const prefs = Object.assign({ vol: 4, muted: false, track: false }, (() => { try { return JSON.parse(localStorage.getItem("maggyPrefs") || "{}"); } catch (e) { return {}; } })());
+function savePrefs() { try { localStorage.setItem("maggyPrefs", JSON.stringify(prefs)); } catch (e) {} }
+const ui = { menuOpen: false, logOpen: false, logByTilt: false };
+let lastReply = null;
+const menuBtn = $("menuBtn"), menu = $("menu"), logEl = $("log"), logBody = $("logBody");
+for (const el of [menuBtn, menu, logEl]) {   // taps on the menu/transcript never poke Maggy or start talking
+  for (const ev of ["pointerdown", "pointerup", "pointercancel"]) el.addEventListener(ev, e => e.stopPropagation()); }
+menuBtn.addEventListener("click", () => ui.menuOpen ? closeMenu() : openMenu());
+function openMenu() { closeLog(); ui.menuOpen = true; menu.hidden = false; drawMenu(); }
+function closeMenu() { ui.menuOpen = false; menu.hidden = true; }
+function drawMenu() {
+  $("volBars").textContent = "▮".repeat(prefs.vol) + "▯".repeat(10 - prefs.vol);
+  $("volNum").textContent = prefs.muted ? "muted" : prefs.vol * 10 + "%";
+  $("muteBtn").textContent = prefs.muted ? "Voice: OFF (text only)" : "Voice: ON";
+  $("muteBtn").setAttribute("aria-pressed", String(prefs.muted));
+  $("trackBtn").textContent = "Head tracking: " + (prefs.track ? "ON" : "OFF");
+  $("trackBtn").setAttribute("aria-pressed", String(prefs.track));
+  $("replayBtn").disabled = !lastReply;
+}
+let tickCtx = null;
+function tick_() {   // little click so you can hear the new volume
+  if (prefs.muted) return;
+  try { tickCtx ||= new (window.AudioContext || window.webkitAudioContext)(); const o = tickCtx.createOscillator(), g = tickCtx.createGain();
+    o.frequency.value = 660; g.gain.value = .25 * prefs.vol / 10; o.connect(g); g.connect(tickCtx.destination); o.start(); o.stop(tickCtx.currentTime + .09); } catch (e) {}
+}
+function setVolume(v) { prefs.vol = Math.max(1, Math.min(10, v)); if (prefs.muted) prefs.muted = false; voice.volume = prefs.vol / 10; savePrefs(); drawMenu(); tick_(); }
+$("volDown").addEventListener("click", () => setVolume(prefs.vol - 1));
+$("volUp").addEventListener("click", () => setVolume(prefs.vol + 1));
+$("muteBtn").addEventListener("click", () => { prefs.muted = !prefs.muted; voice.volume = prefs.muted ? 0 : prefs.vol / 10; if (prefs.muted) { try { voice.pause(); } catch (e) {} } savePrefs(); drawMenu(); });
+$("replayBtn").addEventListener("click", () => { closeMenu(); replayLast(); });
+$("logBtn").addEventListener("click", () => { closeMenu(); openLog(false); });
+$("trackBtn").addEventListener("click", () => { prefs.track = !prefs.track; savePrefs(); drawMenu(); prefs.track ? startTracking() : stopTracking(); });
+$("closeMenu").addEventListener("click", closeMenu);
+
+function replayLast() {   // free: plays the voice already downloaded, or just shows the words again
+  if (!lastReply || talk.busy || talk.listening) return;
+  st.talking = true; talk.busy = true; hold(lastReply.text);
+  const have = lastReply.voice.filter(Boolean);
+  if (prefs.muted || !have.length) { stage_("replay: text"); setTimeout(doneTalking, Math.max(4000, lastReply.text.length * 70)); return; }
+  stage_("replay: no charge"); speakQueue(have.map(a => Promise.resolve({ audio: a }))).catch(() => doneTalking());
+}
+
+// transcript: a terminal-style log of what you said and what she said (kept on the R1 between visits)
+let logLines = (() => { try { return JSON.parse(localStorage.getItem("maggyLog") || "[]"); } catch (e) { return []; } })();
+function logLine(who, text) {
+  if (!text) return; logLines.push({ t: Date.now(), who, text: String(text).slice(0, 4000) }); logLines = logLines.slice(-150);
+  try { localStorage.setItem("maggyLog", JSON.stringify(logLines)); } catch (e) {}
+  if (ui.logOpen) drawLog();
+}
+function drawLog() {
+  logBody.textContent = "";
+  if (!logLines.length) { logBody.textContent = "No conversation yet. Hold the button or the jar and talk to her."; return; }
+  let day = "";
+  for (const l of logLines) {
+    const d = new Date(l.t), dd = d.toLocaleDateString(), tm = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    if (dd !== day) { day = dd; const h = document.createElement("div"); h.className = "day"; h.textContent = "── " + d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + " ──"; logBody.append(h); }
+    const row = document.createElement("div"); row.className = "ln " + l.who;
+    row.textContent = (l.who === "you" ? "> " : l.who === "maggy" ? "maggy: " : "# ") + l.text;
+    row.title = tm; const ts = document.createElement("span"); ts.className = "ts"; ts.textContent = " " + tm; row.append(ts); logBody.append(row);
+  }
+  logBody.scrollTop = logBody.scrollHeight;
+}
+function scrollLog(dy) { logBody.scrollTop += dy; }
+function openLog(byTilt, turn) {
+  closeMenu(); ui.logOpen = true; ui.logByTilt = !!byTilt; logEl.hidden = false;
+  logEl.className = "log" + (turn ? " turn" + turn : ""); drawLog();
+}
+function closeLog() { ui.logOpen = false; ui.logByTilt = false; logEl.hidden = true; }
+$("logClose").addEventListener("click", closeLog);
+$("logClear").addEventListener("click", () => { logLines = []; try { localStorage.removeItem("maggyLog"); } catch (e) {} drawLog(); });
+
+// turn the R1 on its side -> the transcript opens, readable sideways; turn it back -> closes
+let tiltSide = 0, tiltSince = 0;
+window.addEventListener("devicemotion", e => {
+  const g = e.accelerationIncludingGravity; if (!g || g.x == null) return;
+  const side = Math.abs(g.x) > 6.5 && Math.abs(g.x) > Math.abs(g.y) + 2 ? (g.x > 0 ? 1 : -1) : Math.abs(g.y) > 6.5 ? 0 : tiltSide;
+  const now = performance.now();
+  if (side !== tiltSide) { tiltSide = side; tiltSince = now; return; }
+  if (now - tiltSince < 500) return;
+  const wide = window.innerWidth > window.innerHeight;   // if the R1 rotates the page itself, no need to turn the text
+  if (side !== 0 && !(ui.logOpen && ui.logByTilt)) openLog(true, wide ? 0 : (side > 0 ? "R" : "L"));
+  else if (side === 0 && ui.logOpen && ui.logByTilt) closeLog();
+});
+
+// head tracking: front camera + face detection (loaded only when switched on), her view follows your head
+let face = { on: false, x: 0, y: 0, seen: 0 };
+async function startTracking() {
+  if (face.on) return; face.on = true; stage_("tracking: loading…");
+  try {
+    if (!window.MaggyFace) await new Promise((res, rej) => { const sc = document.createElement("script"); sc.src = "face.js?v=" + (window.MAGGY_BUILD || "1"); sc.onload = res; sc.onerror = () => rej(new Error("face.js didn't load")); document.head.append(sc); });
+    await window.MaggyFace.start({
+      base: new URL("vendor/mediapipe", location.href).href, model: new URL("vendor/blaze_face_short_range.tflite", location.href).href,
+      onFace: (x, y) => { face.x = x; face.y = y; face.seen = performance.now(); },
+      onStatus: s => stage_("tracking: " + s),
+    });
+  } catch (e) { face.on = false; prefs.track = false; savePrefs(); drawMenu(); stage_("tracking failed: " + (e.message || e)); logLine("sys", "head tracking failed: " + (e.message || e)); }
+}
+function stopTracking() { face.on = false; try { window.MaggyFace && window.MaggyFace.stop(); } catch (e) {} stage_("tracking: off"); }
+document.addEventListener("visibilitychange", () => { if (!prefs.track) return; document.hidden ? stopTracking() : startTracking(); });
+if (prefs.track) setTimeout(startTracking, 1500);
 
 // ---------------- frame loop ----------------
 const clock = new THREE.Clock(); let frames = 0, acc = 0, nextZ = 0;
@@ -561,7 +667,8 @@ function frame() {
       s.material.opacity = Math.max(0, 1 - age / 2.6); s.scale.setScalar(.14 + age * .05); if (age > 2.6) { scene.remove(s); s.material.dispose(); zs.splice(i, 1); } }
   }
   // camera: peek around her (drag), gentle drift when nobody is touching
-  if (now - lastPointer > 2500) { tx = Math.sin(t / 5.2) * .3; ty = Math.sin(t / 7.3) * .12; }
+  if (face.on && now - face.seen < 1500) { tx = Math.max(-1, Math.min(1, face.x * 1.6)); ty = Math.max(-1, Math.min(1, face.y * 1.2)); lastPointer = now; }
+  else if (now - lastPointer > 2500) { tx = Math.sin(t / 5.2) * .3; ty = Math.sin(t / 7.3) * .12; }
   cx += (tx - cx) * .07; cy += (ty - cy) * .07;
   const wantWide = st.sleep === "flying" || st.sleep === "asleep" || st.sleep === "landing" ? 1 : 0;
   zoomOut += (wantWide - zoomOut) * (reduce ? 1 : .03);
@@ -584,7 +691,7 @@ function frame() {
   $("loading").hidden = true;
   refreshChips(); tick(); setInterval(tick, 250); requestAnimationFrame(frame);
   setTimeout(() => speak("content", "Evenin', sugar."), 800);
-  window.__maggy = { st, playClip, poke, fallAsleep, wake, get bg() { return bgMat; } };   // test hook
+  window.__maggy = { st, playClip, poke, fallAsleep, wake, get bg() { return bgMat; }, get face() { return face; } };   // test hook
 } catch (e) {
   $("loading").textContent = "Maggy couldn't load: " + (e && e.message ? e.message : e);
 } })();
