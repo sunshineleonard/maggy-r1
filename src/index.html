@@ -48,6 +48,14 @@
   .log-type input { flex: 1; min-width: 0; background: #0b140d; color: #e6f7ff; border: 1px solid #1d3a22; border-radius: 4px; font: 12px ui-monospace, monospace; padding: 5px 6px; }
   .log-type input:focus { outline: 1px solid #8dff9a; }
   .log-type button { font: 11px ui-monospace, monospace; color: #050806; background: #8dff9a; border: 0; border-radius: 4px; padding: 5px 8px; }
+  /* Maggy's own keyboard: drawn inside the transcript so it turns with it (the R1's keyboard is always portrait) */
+  .kb { display: flex; flex-direction: column; gap: 3px; padding: 3px 3px 4px; background: #0b140d; border-top: 1px solid #1d3a22; }
+  .kb .kr { display: flex; gap: 3px; justify-content: center; }
+  .kb button { flex: 1 1 0; min-width: 0; height: 25px; padding: 0; border: 0; border-radius: 4px; background: #16301b; color: #d8ffe0;
+    font: 13px ui-monospace, monospace; touch-action: manipulation; }
+  .kb button.wide { flex-grow: 1.6; } .kb button.space { flex-grow: 4.5; } .kb button.go { background: #8dff9a; color: #050806; font-weight: 700; }
+  .kb button.on { background: #4a3a20; color: #ffb547; } .kb button:active { background: #2f6a38; }
+  .log.typing .log-body { min-height: 0; }
   .log .pending { color: #3f7a48; font-style: italic; }
   .log .ts { color: #3f7a48; font-size: 9px; } .log .day { color: #ffb547; text-align: center; margin: 4px 0; font-size: 10px; }
 </style>
@@ -71,7 +79,8 @@
   <section class="log" id="log" hidden aria-label="Transcript">
     <div class="log-top"><span>maggy@jar:~$ log</span><span><button id="logClear" type="button">clear</button><button id="logClose" type="button">close</button></span></div>
     <div class="log-body" id="logBody"></div>
-    <form class="log-type" id="typeForm" autocomplete="off"><span>&gt;</span><input id="typeIn" type="text" maxlength="500" placeholder="type to Maggy…" enterkeyhint="send" autocapitalize="sentences"><button type="submit">send</button></form>
+    <form class="log-type" id="typeForm" autocomplete="off"><span>&gt;</span><input id="typeIn" type="text" maxlength="500" placeholder="tap here to type to Maggy…" inputmode="none" readonly><button type="submit">send</button></form>
+    <div class="kb" id="kb" hidden></div>
   </section>
   <div class="loading" id="loading">Waking Maggy up…</div>
 </main>

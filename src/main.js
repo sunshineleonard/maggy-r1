@@ -601,11 +601,51 @@ function openLog(byTilt, turn) {
   closeMenu(); ui.logOpen = true; ui.logByTilt = !!byTilt; logEl.hidden = false;
   logEl.className = "log" + (turn ? " turn" + turn : ""); drawLog();
 }
-function closeLog() { ui.logOpen = false; ui.logByTilt = false; logEl.hidden = true; }
+function closeLog() { ui.logOpen = false; ui.logByTilt = false; logEl.hidden = true; if (typeof kbHide === "function") kbHide(); }
 $("logClose").addEventListener("click", closeLog);
 
 // typing to her (for meetings): she answers in text only, no voice, no sound
-const typeIn = $("typeIn");
+const typeIn = $("typeIn"), kb = $("kb");
+// her own keyboard: the R1's keyboard always opens in portrait, which is useless when the transcript is sideways
+const KB = {
+  abc: [["q","w","e","r","t","y","u","i","o","p"], ["a","s","d","f","g","h","j","k","l"], ["⇧","z","x","c","v","b","n","m","⌫"], ["123",",","space",".","send"]],
+  num: [["1","2","3","4","5","6","7","8","9","0"], ["-","/",":",";","(",")","$","&","@","\""], ["?","!","'","#","%","+","=","*","⌫"], ["abc",",","space",".","send"]],
+};
+let kbLayer = "abc", kbShift = false, kbRepeat = 0;
+function kbDraw() {
+  kb.textContent = "";
+  const auto = kbLayer === "abc" && (typeIn.value === "" || /[.!?]\s$/.test(typeIn.value));   // capitalise sentence starts
+  for (const row of KB[kbLayer]) {
+    const r = document.createElement("div"); r.className = "kr";
+    for (const k of row) {
+      const b = document.createElement("button"); b.type = "button"; b.dataset.k = k;
+      b.textContent = k === "space" ? "space" : k.length === 1 && (kbShift || auto) ? k.toUpperCase() : k;
+      if (k === "space") b.className = "space"; else if (k === "send") b.className = "wide go"; else if (["⇧", "⌫", "123", "abc"].includes(k)) b.className = "wide" + (k === "⇧" && kbShift ? " on" : "");
+      r.append(b);
+    }
+    kb.append(r);
+  }
+}
+function kbPress(k) {
+  if (k === "send") { kbHide(); $("typeForm").requestSubmit ? $("typeForm").requestSubmit() : $("typeForm").dispatchEvent(new Event("submit", { cancelable: true })); return; }
+  if (k === "⌫") typeIn.value = typeIn.value.slice(0, -1);
+  else if (k === "⇧") { kbShift = !kbShift; }
+  else if (k === "123" || k === "abc") { kbLayer = k === "123" ? "num" : "abc"; }
+  else if (typeIn.value.length < 500) {
+    const auto = kbLayer === "abc" && (typeIn.value === "" || /[.!?]\s$/.test(typeIn.value));
+    typeIn.value += k === "space" ? " " : (kbShift || auto) ? k.toUpperCase() : k; kbShift = false;
+  }
+  kbDraw();
+}
+kb.addEventListener("pointerdown", e => {
+  const b = e.target.closest("button"); if (!b) return; e.preventDefault(); kbPress(b.dataset.k);
+  clearInterval(kbRepeat); if (b.dataset.k === "⌫") { let n = 0; kbRepeat = setInterval(() => { if (++n > 3) kbPress("⌫"); }, 110); }
+});
+for (const ev of ["pointerup", "pointercancel", "pointerleave"]) kb.addEventListener(ev, () => clearInterval(kbRepeat));
+function kbShow() { kb.hidden = false; logEl.classList.add("typing"); kbLayer = "abc"; kbShift = false; kbDraw(); logBody.scrollTop = logBody.scrollHeight; }
+function kbHide() { kb.hidden = true; logEl.classList.remove("typing"); clearInterval(kbRepeat); }
+typeIn.addEventListener("click", () => kb.hidden ? kbShow() : kbHide());
+typeIn.addEventListener("focus", () => { try { typeIn.blur(); } catch (e) {} if (kb.hidden) kbShow(); });
 $("typeForm").addEventListener("submit", async e => {
   e.preventDefault();
   const text = typeIn.value.trim(); if (!text || talk.busy || talk.listening) return;
