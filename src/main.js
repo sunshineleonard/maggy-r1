@@ -463,9 +463,9 @@ async function finishListening(mime) {
   try {
     const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.onerror = rej; r.readAsDataURL(blob); });
     stage_("sent: " + Math.round(blob.size / 1024) + " KB, waiting on words…");
-    const j = await relay("/talk", { audio: b64, mime, mood: moodNow(), when: localWhen(), history: talk.history.slice(-6), speak: false });
+    const j = await relay("/talk", { audio: b64, mime, mood: moodNow(), when: localWhen(), history: talk.history.slice(-6), speak: false, pending: work.pending || undefined });
     talk.history.push({ who: "boss", text: j.heard }, { who: "maggy", text: j.reply }); talk.history = talk.history.slice(-12);
-    logLine("you", j.heard); logLine("maggy", j.reply); lastReply = { text: j.reply, voice: [] };
+    logLine("you", j.heard); logLine("maggy", j.reply); lastReply = { text: j.reply, voice: [] }; tookJob(j, false);
     st.clipLock = false; st.temp = j.mood; st.tempUntil = performance.now() + 60000; hold(j.reply);
     if (j.mood === st.mood) { const clip = pickFrom(j.mood); if (clip) playClip(clip, .5); }
     if (prefs.muted) {   // muted: words only, never ask for her voice (saves the voice cost)
@@ -507,7 +507,7 @@ async function speakQueue(jobs) {
   }
   doneTalking();
 }
-function doneTalking() { stage_("done · hold the button or the jar to talk"); talk.busy = false; st.talking = false; st.lastTouch = performance.now(); st.tempUntil = performance.now() + 5000; release(1800); }
+function doneTalking() { stage_("done · hold the button or the jar to talk"); setTimeout(deliverReports, 1500); talk.busy = false; st.talking = false; st.lastTouch = performance.now(); st.tempUntil = performance.now() + 5000; release(1800); }
 // shake: gentle shake wakes her; a hard shake makes her mad (R1 motion events: peak jolt ~40 when shaken hard)
 let lastAcc = null, shakeCooldown = 0;
 window.addEventListener("devicemotion", e => {
@@ -592,7 +592,7 @@ function drawLog() {
     const d = new Date(l.t), dd = d.toLocaleDateString(), tm = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     if (dd !== day) { day = dd; const h = document.createElement("div"); h.className = "day"; h.textContent = "── " + d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + " ──"; logBody.append(h); }
     const row = document.createElement("div"); row.className = "ln " + l.who;
-    row.textContent = (l.who === "you" ? "> " : l.who === "maggy" ? "maggy: " : "# ") + l.text;
+    row.textContent = (l.who === "you" ? "> " : l.who === "maggy" ? "maggy: " : l.who === "cc" ? "claude: " : "# ") + l.text;
     row.title = tm; const ts = document.createElement("span"); ts.className = "ts"; ts.textContent = " " + tm; row.append(ts); logBody.append(row);
   }
   logBody.scrollTop = logBody.scrollHeight;
@@ -656,10 +656,10 @@ $("typeForm").addEventListener("submit", async e => {
   talk.busy = true; st.talking = true; st.temp = "content"; st.tempUntil = performance.now() + 60000;
   const wait = document.createElement("div"); wait.className = "ln pending"; wait.textContent = "maggy is typing…"; logBody.append(wait); logBody.scrollTop = logBody.scrollHeight;
   try {
-    const j = await relay("/talk", { text, mood: moodNow(), when: localWhen(), history: talk.history.slice(-6), speak: false });
+    const j = await relay("/talk", { text, mood: moodNow(), when: localWhen(), history: talk.history.slice(-6), speak: false, pending: work.pending || undefined });
     talk.history.push({ who: "boss", text }, { who: "maggy", text: j.reply }); talk.history = talk.history.slice(-12);
     lastReply = { text: j.reply, voice: [] }; st.temp = j.mood; st.tempUntil = performance.now() + 8000;
-    logLine("maggy", j.reply);
+    logLine("maggy", j.reply); tookJob(j, true);
   } catch (err) { logLine("sys", "couldn't reach her: " + String(err.message || err).slice(0, 120)); }
   finally { wait.remove(); talk.busy = false; st.talking = false; if (!ui.logOpen) { hold(lastReply ? lastReply.text : ""); release(5000); } }
 });
@@ -723,6 +723,60 @@ async function startTracking() {
 function stopTracking() { face.on = false; stopLite(); try { window.MaggyFace && window.MaggyFace.stop(); } catch (e) {} stage_("tracking: off"); }
 document.addEventListener("visibilitychange", () => { if (!prefs.track) return; document.hidden ? stopTracking() : startTracking(); });
 if (prefs.track) setTimeout(startTracking, 1500);
+
+// ---------------- project work: jobs handed to Claude Code on the laptop ----------------
+// /talk may come back with a job id. We check on it through the relay every few seconds (and again after reopening her).
+// When it's done she knocks on the glass and tells you; full details go in the transcript.
+const work = { jobs: [], pending: null, reports: [], timer: 0 };
+try { work.jobs = JSON.parse(localStorage.getItem("maggyJobs") || "[]"); work.pending = JSON.parse(localStorage.getItem("maggyPending") || "null"); } catch (e) {}
+function saveWork() { try { localStorage.setItem("maggyJobs", JSON.stringify(work.jobs)); localStorage.setItem("maggyPending", JSON.stringify(work.pending)); } catch (e) {} }
+function tookJob(j, quiet) {
+  if (work.pending && j.job && j.job.granted) work.pending = null;            // the yes was used
+  else if (work.pending && !j.job) work.pending = null;                       // they moved on (or said no)
+  if (j.job && j.job.id) {
+    work.jobs.push({ id: j.job.id, task: j.job.task, started: Date.now(), quiet: !!quiet || prefs.muted });
+    logLine("cc", "→ sent to Claude Code: " + j.job.task);
+    stage_("Claude Code is on it…"); pollJobs(4000);
+  } else if (j.job && j.job.error) logLine("sys", "Claude Code unreachable: " + j.job.error);
+  saveWork();
+}
+function pollJobs(delay = 5000) { clearTimeout(work.timer); if (work.jobs.length) work.timer = setTimeout(checkJobs, delay); }
+async function checkJobs() {
+  if (!PASS || document.hidden) return pollJobs(8000);
+  for (const job of [...work.jobs]) {
+    let r; try { r = await relay("/job", { id: job.id }); }
+    catch (e) {
+      if (/404/.test(String(e)) || Date.now() - job.started > 30 * 60000) {   // the laptop restarted or it's long gone
+        work.jobs = work.jobs.filter(x => x !== job); logLine("sys", "lost track of a Claude Code job (laptop restarted?): " + job.task.slice(0, 120));
+      }
+      continue;
+    }
+    if (r.status === "running") continue;
+    work.jobs = work.jobs.filter(x => x !== job);
+    const blocked = r.needs && r.needs.length;
+    logLine("cc", "Claude Code " + (r.status === "done" ? "finished" : "had a problem") + (r.secs ? " (" + r.secs + "s" + (r.cost ? ", $" + (+r.cost).toFixed(3) : "") + ")" : "") + ": " + (r.summary || "") + (r.details ? "\n\n" + r.details : ""));
+    if (blocked) work.pending = { task: job.task, needs: r.needs, summary: r.summary };
+    work.reports.push({ text: r.summary || "It's done, but it didn't say much.", quiet: job.quiet, blocked, ok: r.status === "done" });
+  }
+  saveWork(); deliverReports(); pollJobs();
+}
+function deliverReports() {
+  if (!work.reports.length || talk.busy || talk.listening) return;
+  const rep = work.reports.shift();
+  const lead = rep.blocked ? "Boss, Claude Code needs your say-so." : rep.ok ? "Boss! Claude Code's done." : "Uh oh, boss, Claude Code hit a snag.";
+  const text = lead + " " + rep.text;
+  lastReply = { text, voice: [] }; talk.busy = true; st.talking = true;
+  if (st.sleep !== "awake") wake(false);
+  st.temp = "wants"; st.tempUntil = performance.now() + 60000; st.clipLock = true; playClip("Um_Helloooo_Knock", .3);   // knock knock
+  hold(text); stage_("Claude Code report" + (rep.blocked ? " · say yes or no" : ""));
+  setTimeout(async () => {
+    st.clipLock = false; st.temp = rep.ok && !rep.blocked ? "delighted" : "sassy";
+    if (rep.quiet || prefs.muted) { setTimeout(doneTalking, Math.max(5000, text.length * 70)); return; }
+    try { const jobs = sentences(text).map(t => relay("/say", { text: t })); jobs.forEach((p, i) => p.then(v => { lastReply.voice[i] = v.audio; }).catch(() => {})); await speakQueue(jobs); }
+    catch (e) { doneTalking(); }
+  }, 1600);
+}
+if (work.jobs.length) pollJobs(3000);
 
 // ---------------- frame loop ----------------
 const clock = new THREE.Clock(); let frames = 0, acc = 0, nextZ = 0;
