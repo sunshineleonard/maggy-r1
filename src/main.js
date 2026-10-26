@@ -373,7 +373,7 @@ function endTouch(e) { clearTimeout(holdTimer);
   if (touchTalk) { touchTalk = false; down = null; stopListening(); return; }
   if (e.type === "pointerup" && down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 10 && performance.now() - down.t < 450) poke(); down = null; }
 stage.addEventListener("pointerup", endTouch); stage.addEventListener("pointercancel", endTouch);
-stage.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); poke(); } });
+stage.addEventListener("keydown", e => { if (e.target && e.target.tagName === "INPUT") return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); poke(); } });
 stage.tabIndex = 0;
 
 // ---------------- R1 hardware ----------------
@@ -526,11 +526,12 @@ window.addEventListener("devicemotion", e => {
 });
 // desktop testing: arrows = wheel, space = long press, S = gentle shake, H = hard shake
 window.addEventListener("keydown", e => {
+  if (e.target && e.target.tagName === "INPUT") return;
   if (e.key === "ArrowUp") window.dispatchEvent(new Event("scrollUp"));
   if (e.key === "ArrowDown") window.dispatchEvent(new Event("scrollDown"));
   if (e.key === "l" && !e.repeat) window.dispatchEvent(new Event("longPressStart"));
 });
-window.addEventListener("keyup", e => { if (e.key === "l") window.dispatchEvent(new Event("longPressEnd")); });
+window.addEventListener("keyup", e => { if (e.target && e.target.tagName === "INPUT") return; if (e.key === "l") window.dispatchEvent(new Event("longPressEnd")); });
 
 // ---------------- settings menu, transcript, head tracking ----------------
 const prefs = Object.assign({ vol: 4, muted: false, track: false }, (() => { try { return JSON.parse(localStorage.getItem("maggyPrefs") || "{}"); } catch (e) { return {}; } })());
@@ -602,6 +603,25 @@ function openLog(byTilt, turn) {
 }
 function closeLog() { ui.logOpen = false; ui.logByTilt = false; logEl.hidden = true; }
 $("logClose").addEventListener("click", closeLog);
+
+// typing to her (for meetings): she answers in text only, no voice, no sound
+const typeIn = $("typeIn");
+$("typeForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const text = typeIn.value.trim(); if (!text || talk.busy || talk.listening) return;
+  if (!PASS) { logLine("sys", "She needs her pass code (install from the private QR) before she can answer."); return; }
+  typeIn.value = ""; logLine("you", text); st.lastTouch = performance.now();
+  if (st.sleep !== "awake") wake(false);
+  talk.busy = true; st.talking = true; st.temp = "content"; st.tempUntil = performance.now() + 60000;
+  const wait = document.createElement("div"); wait.className = "ln pending"; wait.textContent = "maggy is typing…"; logBody.append(wait); logBody.scrollTop = logBody.scrollHeight;
+  try {
+    const j = await relay("/talk", { text, mood: moodNow(), when: localWhen(), history: talk.history.slice(-6), speak: false });
+    talk.history.push({ who: "boss", text }, { who: "maggy", text: j.reply }); talk.history = talk.history.slice(-12);
+    lastReply = { text: j.reply, voice: [] }; st.temp = j.mood; st.tempUntil = performance.now() + 8000;
+    logLine("maggy", j.reply);
+  } catch (err) { logLine("sys", "couldn't reach her: " + String(err.message || err).slice(0, 120)); }
+  finally { wait.remove(); talk.busy = false; st.talking = false; if (!ui.logOpen) { hold(lastReply ? lastReply.text : ""); release(5000); } }
+});
 $("logClear").addEventListener("click", () => { logLines = []; try { localStorage.removeItem("maggyLog"); } catch (e) {} drawLog(); });
 
 // turn the R1 on its side -> the transcript opens, readable sideways; turn it back -> closes
