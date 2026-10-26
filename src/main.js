@@ -549,8 +549,8 @@ function drawMenu() {
   $("volNum").textContent = prefs.muted ? "muted" : prefs.vol * 10 + "%";
   $("muteBtn").textContent = prefs.muted ? "Voice: OFF (text only)" : "Voice: ON";
   $("muteBtn").setAttribute("aria-pressed", String(prefs.muted));
-  $("trackBtn").textContent = "Head tracking: " + (prefs.track ? "ON" : "OFF");
-  $("trackBtn").setAttribute("aria-pressed", String(prefs.track));
+  $("trackBtn").textContent = "Head tracking: " + (prefs.track === "lite" ? "LITE" : prefs.track ? "FULL" : "OFF");
+  $("trackBtn").setAttribute("aria-pressed", String(!!prefs.track));
   $("replayBtn").disabled = !lastReply;
 }
 let tickCtx = null;
@@ -565,7 +565,8 @@ $("volUp").addEventListener("click", () => setVolume(prefs.vol + 1));
 $("muteBtn").addEventListener("click", () => { prefs.muted = !prefs.muted; voice.volume = prefs.muted ? 0 : prefs.vol / 10; if (prefs.muted) { try { voice.pause(); } catch (e) {} } savePrefs(); drawMenu(); });
 $("replayBtn").addEventListener("click", () => { closeMenu(); replayLast(); });
 $("logBtn").addEventListener("click", () => { closeMenu(); openLog(false); });
-$("trackBtn").addEventListener("click", () => { prefs.track = !prefs.track; savePrefs(); drawMenu(); prefs.track ? startTracking() : stopTracking(); });
+$("trackBtn").addEventListener("click", () => {   // cycles OFF -> LITE -> FULL -> OFF
+  stopTracking(); prefs.track = !prefs.track ? "lite" : prefs.track === "lite" ? "full" : false; savePrefs(); drawMenu(); if (prefs.track) startTracking(); });
 $("closeMenu").addEventListener("click", closeMenu);
 
 function replayLast() {   // free: plays the voice already downloaded, or just shows the words again
@@ -679,8 +680,37 @@ window.addEventListener("devicemotion", e => {
 
 // head tracking: front camera + face detection (loaded only when switched on), her view follows your head
 let face = { on: false, x: 0, y: 0, seen: 0 };
+// LITE: no face finder at all; follows the skin-toned blob (your head) in a tiny 40x30 copy of the camera picture.
+// Costs almost nothing, so it runs at the camera's own speed. Rougher than FULL: hands in view or odd lighting can pull it.
+const lite = { stream: null, video: null, ctx: null, timer: 0, n: 0, t0: 0 };
+async function startLite() {
+  stage_("tracking: camera…");
+  lite.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 160 }, height: { ideal: 120 }, frameRate: { ideal: 15 } }, audio: false });
+  const v = lite.video = document.createElement("video"); v.muted = true; v.playsInline = true; v.setAttribute("playsinline", ""); v.srcObject = lite.stream; await v.play();
+  const c = document.createElement("canvas"); c.width = 40; c.height = 30; lite.ctx = c.getContext("2d", { willReadFrequently: true });
+  lite.n = 0; lite.t0 = performance.now(); stage_("tracking: lite on");
+  const step = () => {
+    if (!face.on) return;
+    if (v.readyState >= 2) {
+      lite.ctx.drawImage(v, 0, 0, 40, 30);
+      const d = lite.ctx.getImageData(0, 0, 40, 30).data; let sx = 0, sy = 0, n = 0;
+      for (let y = 0, i = 0; y < 30; y++) for (let x = 0; x < 40; x++, i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2], mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+        if (r > 70 && g > 35 && b > 15 && mx - mn > 12 && r > g && r > b && r - g > 10) { sx += x; sy += y; n++; }   // skin-ish
+      }
+      if (n > 12) { const f = (sx / n + .5) / 40, g = (sy / n + .5) / 30; face.x = (.5 - f) * 2; face.y = (.5 - g) * 2; face.seen = performance.now(); }
+      lite.n++; const now = performance.now();
+      if (now - lite.t0 > 3000) { stage_("tracking: lite · " + Math.round(lite.n * 1000 / (now - lite.t0)) + " fps" + (now - face.seen > 1500 ? " · can't see you" : "")); lite.n = 0; lite.t0 = now; }
+    }
+    lite.timer = setTimeout(step, 66);
+  };
+  step();
+}
+function stopLite() { clearTimeout(lite.timer); if (lite.stream) lite.stream.getTracks().forEach(t => t.stop()); lite.stream = null; if (lite.video) { lite.video.srcObject = null; lite.video = null; } }
 async function startTracking() {
   if (face.on) return; face.on = true; stage_("tracking: loading…");
+  if (prefs.track === true) prefs.track = "full";   // older saved setting
+  if (prefs.track === "lite") { try { await startLite(); } catch (e) { face.on = false; prefs.track = false; savePrefs(); drawMenu(); stage_("tracking failed: " + (e.message || e)); } return; }
   try {
     if (!window.MaggyFace) await new Promise((res, rej) => { const sc = document.createElement("script"); sc.src = "face.js?v=" + (window.MAGGY_BUILD || "1"); sc.onload = res; sc.onerror = () => rej(new Error("face.js didn't load")); document.head.append(sc); });
     await window.MaggyFace.start({
@@ -690,7 +720,7 @@ async function startTracking() {
     });
   } catch (e) { face.on = false; prefs.track = false; savePrefs(); drawMenu(); stage_("tracking failed: " + (e.message || e)); logLine("sys", "head tracking failed: " + (e.message || e)); }
 }
-function stopTracking() { face.on = false; try { window.MaggyFace && window.MaggyFace.stop(); } catch (e) {} stage_("tracking: off"); }
+function stopTracking() { face.on = false; stopLite(); try { window.MaggyFace && window.MaggyFace.stop(); } catch (e) {} stage_("tracking: off"); }
 document.addEventListener("visibilitychange", () => { if (!prefs.track) return; document.hidden ? stopTracking() : startTracking(); });
 if (prefs.track) setTimeout(startTracking, 1500);
 
