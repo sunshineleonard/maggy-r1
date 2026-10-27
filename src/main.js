@@ -542,7 +542,16 @@ const menuBtn = $("menuBtn"), menu = $("menu"), logEl = $("log"), logBody = $("l
 for (const el of [menuBtn, menu, logEl]) {   // taps on the menu/transcript never poke Maggy or start talking
   for (const ev of ["pointerdown", "pointerup", "pointercancel"]) el.addEventListener(ev, e => e.stopPropagation()); }
 menuBtn.addEventListener("click", () => ui.menuOpen ? closeMenu() : openMenu());
-function openMenu() { closeLog(); ui.menuOpen = true; menu.hidden = false; drawMenu(); }
+function openMenu() { closeLog(); ui.menuOpen = true; menu.hidden = false; drawMenu(); checkAgent(); }
+async function checkAgent() {   // is Claude Code on the laptop reachable? (relay pings it through the tunnel)
+  const el = $("agentLine"); if (!PASS) { el.textContent = "Laptop agent: needs her pass code"; return; }
+  el.textContent = "Laptop agent: checking…"; el.style.color = "";
+  try {
+    const r = await relay("/agent/ping", {}), tm = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    el.textContent = r.ok ? "Laptop agent: ✓ connected" + (r.running ? " · " + r.running + " job running" : "") + " (" + tm + ")" : "Laptop agent: ✗ not reachable (" + tm + ")";
+    el.style.color = r.ok ? "#9be37a" : "#ff8a7a";
+  } catch (e) { el.textContent = "Laptop agent: ✗ couldn't check (" + String(e.message || e).slice(0, 40) + ")"; el.style.color = "#ff8a7a"; }
+}
 function closeMenu() { ui.menuOpen = false; menu.hidden = true; }
 function drawMenu() {
   $("volBars").textContent = "▮".repeat(prefs.vol) + "▯".repeat(10 - prefs.vol);
