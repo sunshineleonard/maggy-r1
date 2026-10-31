@@ -9,11 +9,11 @@ const MOODS = {
   content:   { label: "Content",   color: "#ffb547", glow: .55, clips: ["Idle", "Happy_Idle", "Look_Around", "1_hand_Looking_w_turn", "Neck_Stretching", "Thinking", "Sitting_Idle"],
                lines: ["Porch-sittin' weather.", "I'm just fine in here. Mostly.", "Ain't this nice."] },
   wants:     { label: "Wants you", color: "#5aa9ff", glow: .6,  clips: ["Waving", "Waving_2_hands", "Um_Helloooo_Knock", "Hey_Sugar"],
-               lines: ["Hey. Hey you. Over here.", "Ummm, helloooo?", "You forget about me, darlin'?"] },
+               lines: ["Hey. Hey you. Over here.", "Ummm, helloooo?", "You forget about me?"] },
   delighted: { label: "Delighted", color: "#b6f25a", glow: .95, clips: ["Happy", "Macarena_Dance"],
                lines: ["Well hey there!", "There you are!", "Now that's what I'm talkin' about!"] },
   sassy:     { label: "Sassy",     color: "#ff6fb5", glow: .7,  clips: ["Shrugging", "No", "Shaking_Head_No"],
-               lines: ["Well, bless your heart.", "Don't you sugar me.", "I could fix your schedule. I won't. But I could."] },
+               lines: ["Well, bless your heart.", "Oh, is that right?", "I could fix your schedule. I won't. But I could."] },
   annoyed:   { label: "Annoyed",   color: "#ff4d3d", glow: .85, clips: ["Angry", "Annoyed_Head_Shake", "Sad_Idle"],
                lines: ["Quit tappin' the glass!", "Do I look like a snow globe to you?", "Keep it up, see what happens."] },
   sleepy:    { label: "Sleepy",    color: "#b9a2ff", glow: .28, clips: ["Hammock_pose"],
@@ -259,24 +259,24 @@ function setTemp(m, ms, line) { st.temp = m; st.tempUntil = performance.now() + 
 function partOfDay(h = new Date().getHours()) { return h >= 5 && h < 12 ? "morning" : h >= 12 && h < 17 ? "afternoon" : h >= 17 && h < 21 ? "evening" : "late"; }
 const pick = a => a[Math.floor(Math.random() * a.length)];
 const HELLO = {
-  morning:   ["Mornin', sugar.", "Well, good mornin', boss.", "Mornin'. Coffee first, then me.", "Rise and shine, hon."],
-  afternoon: ["Afternoon, sugar.", "Well, hey there, boss.", "Afternoon, hon. Hot one out there?", "There you are."],
-  evening:   ["Evenin', sugar.", "Evenin', boss. Porch light's on.", "Well, evenin', hon.", "Fireflies are out, and so are you."],
-  late:      ["Up late, sugar?", "Night owl, huh, boss?", "Well, ain't you up past your bedtime.", "It's the middle of the night, hon."],
+  morning:   ["Mornin'.", "Well, good mornin', boss.", "Mornin'. Coffee first, then me.", "Rise and shine."],
+  afternoon: ["Afternoon.", "Well, hey there.", "Afternoon. Hot one out there?", "There you are."],
+  evening:   ["Evenin'.", "Evenin'. Porch light's on.", "Well, look who's here.", "Fireflies are out, and so are you."],
+  late:      ["Up late?", "Night owl, huh?", "Well, ain't you up past your bedtime.", "It's the middle of the night, hon."],
 };
 function greetingNow() {
   const now = Date.now(); let last = 0;
   try { last = +localStorage.getItem("maggySeen") || 0; localStorage.setItem("maggySeen", String(now)); } catch (e) {}
   const away = last ? (now - last) / 3600000 : 0, part = partOfDay(), day = new Date().getDay();
   if (last && away < 0.1) return pick(["Back already?", "Miss me that quick?", "Well, hey again."]);
-  if (away > 48) return pick(["Well, look who remembered me.", "Days, sugar. Whole days. I counted.", "Thought you forgot about me, boss."]);
-  if (away > 12 && part === "morning") return pick(["Mornin', sugar. I missed you.", "Mornin'. You were gone all night, hon."]);
-  if (part === "morning" && day === 1) return pick(["Mornin'. Monday again, huh?", "Happy Monday, sugar. Bless us both."]);
-  if (part === "afternoon" && day === 5) return pick(["Afternoon, sugar. It's Friday, thank the Lord."]);
-  if ((day === 0 || day === 6) && part !== "late" && Math.random() < .4) return pick(["Happy weekend, sugar.", "Weekend's here, hon. Sit a spell."]);
+  if (away > 48) return pick(["Well, look who remembered me.", "Days. Whole days. I counted.", "Thought you forgot about me."]);
+  if (away > 12 && part === "morning") return pick(["Mornin'. I missed you.", "Mornin'. You were gone all night."]);
+  if (part === "morning" && day === 1) return pick(["Mornin'. Monday again, huh?", "Happy Monday. Bless us both."]);
+  if (part === "afternoon" && day === 5) return pick(["Afternoon. It's Friday, thank the Lord."]);
+  if ((day === 0 || day === 6) && part !== "late" && Math.random() < .4) return pick(["Happy weekend.", "Weekend's here. Sit a spell."]);
   return pick(HELLO[part]);
 }
-function wakeLine() { return { morning: "Mornin', sugar.", afternoon: "Well, I'm up. Was just restin' my eyes.", evening: "Alright, alright, I'm up.", late: "Mmh… it's the middle of the night, hon." }[partOfDay()]; }
+function wakeLine() { return { morning: "Mornin'.", afternoon: "Well, I'm up. Was just restin' my eyes.", evening: "Alright, alright, I'm up.", late: "Mmh… it's the middle of the night, hon." }[partOfDay()]; }
 function lightNow() { if (st.light !== "auto") return st.light; const h = new Date().getHours(); return h >= 7 && h < 17 ? "day" : h >= 17 && h < 20 ? "dusk" : "night"; }
 
 function poke() {
@@ -367,7 +367,7 @@ stage.addEventListener("pointermove", aim);
 let holdTimer = 0, touchTalk = false;
 stage.addEventListener("pointerdown", e => { aim(e); down = { x: e.clientX, y: e.clientY, t: performance.now() };
   openMic();   // a touch counts as permission to use the mic: get it ready now
-  clearTimeout(holdTimer); holdTimer = setTimeout(() => { if (down && PASS && !talk.busy) { touchTalk = true; st.lastTouch = performance.now(); if (st.sleep !== "awake") wake(false); startListening(); } }, 500); });
+  clearTimeout(holdTimer); holdTimer = setTimeout(() => { if (down && PASS) { if (talk.busy) interrupt(); touchTalk = true; st.lastTouch = performance.now(); if (st.sleep !== "awake") wake(false); startListening(); } }, 500); });
 stage.addEventListener("pointermove", e => { if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 12) clearTimeout(holdTimer); });
 function endTouch(e) { clearTimeout(holdTimer);
   if (touchTalk) { touchTalk = false; down = null; stopListening(); return; }
@@ -384,11 +384,12 @@ window.addEventListener("scrollDown", () => { if (ui.menuOpen) setVolume(prefs.v
 // long press (hold the side button): talk to her (when she has her pass code), else a gentle "hey"
 function greet() {
   if (st.sleep !== "awake") { wake(false); setTemp("content", 4000, wakeLine()); }
-  else if (st.auto) setTemp("delighted", 4500, "Well hey there, boss!");
+  else if (st.auto) setTemp("delighted", 4500, "Well, hey there!");
 }
 window.addEventListener("longPressStart", () => {
   st.lastTouch = performance.now(); closeMenu(); if (ui.logOpen && !ui.logByTilt) closeLog();
-  if (!PASS || talk.busy) { if (!talk.busy) greet(); return; }
+  if (talk.busy) interrupt();   // she's talking (or thinking): hush her and listen right away
+  if (!PASS) { greet(); return; }
   if (st.sleep !== "awake") wake(false);
   startListening();
 });
@@ -398,7 +399,7 @@ window.addEventListener("longPressEnd", () => stopListening());
 const RELAY = "https://maggy-voice.sunshineleonard.workers.dev";
 let PASS = null;   // private pass code: arrives once in the install QR (?k=...), then remembered on the R1
 try { const q = new URLSearchParams(location.search).get("k"); if (q) localStorage.setItem("maggyKey", q); PASS = localStorage.getItem("maggyKey"); } catch (e) {}
-const talk = { busy: false, listening: false, rec: null, chunks: [], t0: 0, stream: null, stopAsked: false, history: [], pendingQueue: null };
+const talk = { busy: false, listening: false, rec: null, chunks: [], t0: 0, stream: null, stopAsked: false, history: [], pendingQueue: null, gen: 0, stopVoice: null };
 const voice = new Audio(); voice.preload = "auto";
 const VOICE_RATE = 1.08;   // user pick: her voice 8% faster, same pitch
 function rateUp() { voice.volume = prefs.muted ? 0 : prefs.vol / 10; voice.defaultPlaybackRate = VOICE_RATE; voice.playbackRate = VOICE_RATE; voice.preservesPitch = true; voice.webkitPreservesPitch = true; }
@@ -432,9 +433,9 @@ function openMic() {
 async function startListening() {
   if (talk.listening) return;
   talk.listening = true; talk.stopAsked = false; talk.chunks = []; st.talking = true;
-  st.temp = "wants"; st.tempUntil = performance.now() + 60000; hold("I'm listenin', sugar…"); st.clipLock = true; playClip("Idle", .3);
+  st.temp = "wants"; st.tempUntil = performance.now() + 60000; hold("I'm listenin'…"); st.clipLock = true; playClip("Idle", .3);
   try { await openMic(); if (!micLive()) throw new Error("mic not live"); }
-  catch (e) { stage_("mic failed: " + (e.message || e.name)); return oops(talk.stopAsked ? "I couldn't get to the mic in time, sugar. Tap me once, then try." : "Can't hear a thing, hon. Mic's off."); }
+  catch (e) { stage_("mic failed: " + (e.message || e.name)); return oops(talk.stopAsked ? "Couldn't get to the mic in time. Tap me once, then try." : "Can't hear a thing. Mic's off."); }
   try {
     const rec = talk.rec = new MediaRecorder(talk.stream);
     rec.ondataavailable = e => { if (e.data && e.data.size) talk.chunks.push(e.data); };
@@ -459,24 +460,25 @@ async function finishListening(mime) {
   const ms = performance.now() - talk.t0, blob = new Blob(talk.chunks, { type: mime });
   stage_("rec: " + (ms / 1000).toFixed(1) + "s, " + Math.round(blob.size / 1024) + " KB");
   if (ms < 700 || blob.size < 2000) { st.temp = null; st.talking = false; st.clipLock = false; release(0); greet(); return; }   // just a tap of the button: old hello
-  talk.busy = true; st.temp = "content"; st.tempUntil = performance.now() + 60000; hold("Hmm…"); st.clipLock = true; playClip("Thinking", .4);
+  talk.busy = true; const gen = ++talk.gen; st.temp = "content"; st.tempUntil = performance.now() + 60000; hold("Hmm…"); st.clipLock = true; playClip("Thinking", .4);
   try {
     const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.onerror = rej; r.readAsDataURL(blob); });
     stage_("sent: " + Math.round(blob.size / 1024) + " KB, waiting on words…");
     const j = await relay("/talk", { audio: b64, mime, mood: moodNow(), when: localWhen(), history: talk.history.slice(-6), speak: false, pending: work.pending || undefined });
     talk.history.push({ who: "boss", text: j.heard }, { who: "maggy", text: j.reply }); talk.history = talk.history.slice(-12);
     logLine("you", j.heard); logLine("maggy", j.reply); lastReply = { text: j.reply, voice: [] }; tookJob(j, false);
+    if (gen !== talk.gen) return;   // you cut her off while she was thinking: keep the reply in the log, don't say it
     st.clipLock = false; st.temp = j.mood; st.tempUntil = performance.now() + 60000; hold(j.reply);
     if (j.mood === st.mood) { const clip = pickFrom(j.mood); if (clip) playClip(clip, .5); }
     if (prefs.muted) {   // muted: words only, never ask for her voice (saves the voice cost)
-      stage_("muted: text only"); setTimeout(doneTalking, Math.max(4000, j.reply.length * 70)); return;
+      stage_("muted: text only"); setTimeout(() => { if (gen === talk.gen) doneTalking(); }, Math.max(4000, j.reply.length * 70)); return;
     }
     stage_("heard: \"" + j.heard.slice(0, 60) + "\" · making voice…");
     // voice each sentence in parallel and play them in order: she starts talking as soon as the first one is ready
     const jobs = sentences(j.reply).map(t => relay("/say", { text: t }));
     jobs.forEach((p, i) => p.then(v => { if (lastReply) lastReply.voice[i] = v.audio; }).catch(() => {}));
-    await speakQueue(jobs);
-  } catch (e) { console.warn(e); stage_("error: " + String(e.message || e).slice(0, 80)); logLine("sys", "error: " + String(e.message || e).slice(0, 200)); oops(/401/.test(String(e)) ? "Who're you? I don't know that pass code." : "My jar's got bad reception. Try me again?"); }
+    await speakQueue(jobs, gen);
+  } catch (e) { if (gen !== talk.gen) return; console.warn(e); stage_("error: " + String(e.message || e).slice(0, 80)); logLine("sys", "error: " + String(e.message || e).slice(0, 200)); oops(/401/.test(String(e)) ? "Who're you? I don't know that pass code." : "My jar's got bad reception. Try me again?"); }
 }
 async function relay(path, body) {
   const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 45000);
@@ -495,17 +497,30 @@ function sentences(text) {   // split into sentences; fold short bits into the n
   if (buf) { if (out.length) out[out.length - 1] += " " + buf; else out.push(buf); }
   return out.slice(0, 4).concat(out.length > 4 ? [out.slice(4).join(" ")] : []).filter(Boolean);
 }
-function playOne(src) {   // resolves true when it finished, false if the WebView blocked playback
-  return new Promise(res => { voice.src = src; rateUp(); voice.onended = () => res(true); voice.onerror = () => res(true);
-    voice.play().catch(e => { stage_("voice blocked: " + (e.name || e)); res(false); }); });
+function playOne(src) {   // resolves true when it finished, false if the WebView blocked playback, "cut" if you interrupted
+  return new Promise(res => { talk.stopVoice = () => res("cut"); voice.src = src; rateUp(); voice.onended = () => res(true); voice.onerror = () => res(true);
+    voice.play().catch(e => { if (e && e.name === "AbortError") return res("cut"); stage_("voice blocked: " + (e.name || e)); res(false); }); });
 }
-async function speakQueue(jobs) {
+async function speakQueue(jobs, gen = talk.gen) {
   for (let i = 0; i < jobs.length; i++) {
-    let v; try { v = await jobs[i]; } catch (e) { if (i === 0) throw e; break; }
+    let v; try { v = await jobs[i]; } catch (e) { if (gen !== talk.gen) return; if (i === 0) throw e; break; }
+    if (gen !== talk.gen) return;
     stage_("voice: " + (i + 1) + "/" + jobs.length);
-    if (!(await playOne("data:audio/wav;base64," + v.audio))) { talk.pendingQueue = jobs.slice(i); hold(say.textContent + "  (tap me to hear it)"); return; }
+    const r = await playOne("data:audio/wav;base64," + v.audio); talk.stopVoice = null;
+    if (r === "cut" || gen !== talk.gen) return;
+    if (!r) { talk.pendingQueue = jobs.slice(i); hold(say.textContent + "  (tap me to hear it)"); return; }
   }
   doneTalking();
+}
+// hold the button (or the jar) while she's talking: she stops mid-word and listens. Added 2026-10-30.
+function interrupt() {
+  talk.gen++;
+  voice.onended = null; voice.onerror = null; try { voice.pause(); } catch (e) {}
+  if (talk.stopVoice) { const f = talk.stopVoice; talk.stopVoice = null; f(); }
+  talk.pendingQueue = null; talk.busy = false; st.talking = false; st.clipLock = false;
+  const last = talk.history[talk.history.length - 1];
+  if (last && last.who === "maggy" && !/\[the boss cut me off/.test(last.text)) last.text += " [the boss cut me off here]";
+  logLine("sys", "(you cut her off)"); stage_("cut off · listening");
 }
 function doneTalking() { stage_("done · hold the button or the jar to talk"); setTimeout(deliverReports, 1500); talk.busy = false; st.talking = false; st.lastTouch = performance.now(); st.tempUntil = performance.now() + 5000; release(1800); }
 // shake: gentle shake wakes her; a hard shake makes her mad (R1 motion events: peak jolt ~40 when shaken hard)
@@ -580,7 +595,7 @@ $("closeMenu").addEventListener("click", closeMenu);
 
 function replayLast() {   // free: plays the voice already downloaded, or just shows the words again
   if (!lastReply || talk.busy || talk.listening) return;
-  st.talking = true; talk.busy = true; hold(lastReply.text);
+  st.talking = true; talk.busy = true; talk.gen++; hold(lastReply.text);
   const have = lastReply.voice.filter(Boolean);
   if (prefs.muted || !have.length) { stage_("replay: text"); setTimeout(doneTalking, Math.max(4000, lastReply.text.length * 70)); return; }
   stage_("replay: no charge"); speakQueue(have.map(a => Promise.resolve({ audio: a }))).catch(() => doneTalking());
@@ -772,17 +787,18 @@ async function checkJobs() {
 function deliverReports() {
   if (!work.reports.length || talk.busy || talk.listening) return;
   const rep = work.reports.shift();
-  const lead = rep.blocked ? "Boss, Claude Code needs your say-so." : rep.ok ? "Boss! Claude Code's done." : "Uh oh, boss, Claude Code hit a snag.";
+  const lead = rep.blocked ? "Claude Code needs your say-so." : rep.ok ? "Claude Code's done." : "Uh oh, Claude Code hit a snag.";
   const text = lead + " " + rep.text;
-  lastReply = { text, voice: [] }; talk.busy = true; st.talking = true;
+  lastReply = { text, voice: [] }; talk.busy = true; st.talking = true; const gen = ++talk.gen;
   if (st.sleep !== "awake") wake(false);
   st.temp = "wants"; st.tempUntil = performance.now() + 60000; st.clipLock = true; playClip("Um_Helloooo_Knock", .3);   // knock knock
   hold(text); stage_("Claude Code report" + (rep.blocked ? " · say yes or no" : ""));
   setTimeout(async () => {
     st.clipLock = false; st.temp = rep.ok && !rep.blocked ? "delighted" : "sassy";
-    if (rep.quiet || prefs.muted) { setTimeout(doneTalking, Math.max(5000, text.length * 70)); return; }
-    try { const jobs = sentences(text).map(t => relay("/say", { text: t })); jobs.forEach((p, i) => p.then(v => { lastReply.voice[i] = v.audio; }).catch(() => {})); await speakQueue(jobs); }
-    catch (e) { doneTalking(); }
+    if (gen !== talk.gen) return;
+    if (rep.quiet || prefs.muted) { setTimeout(() => { if (gen === talk.gen) doneTalking(); }, Math.max(5000, text.length * 70)); return; }
+    try { const jobs = sentences(text).map(t => relay("/say", { text: t })); jobs.forEach((p, i) => p.then(v => { lastReply.voice[i] = v.audio; }).catch(() => {})); await speakQueue(jobs, gen); }
+    catch (e) { if (gen === talk.gen) doneTalking(); }
   }, 1600);
 }
 if (work.jobs.length) pollJobs(3000);
